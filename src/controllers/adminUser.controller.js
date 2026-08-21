@@ -27,6 +27,11 @@ const ensureClubsExist = async (clubIds) => {
   }
 }
 
+exports.listClubAdmins = catchAsync(async (req, res, next) => {
+  const users = await User.find({ role: 'club_admin' }).sort({ createdAt: -1 })
+  success(res, 200, { users: users.map(sanitizeUser) })
+})
+
 // This route family exists specifically to create/manage club_admin
 // accounts. There is intentionally no way through here (or anywhere else)
 // for a client to create a superadmin — that only happens via the

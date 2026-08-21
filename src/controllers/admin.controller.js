@@ -14,7 +14,12 @@ exports.getStats = catchAsync(async (req, res, next) => {
       Activity.countDocuments({ status: 'upcoming' }),
     ])
 
-    return success(res, 200, { totalClubs, totalActivities, totalMembers, upcomingActivities })
+    return success(res, 200, {
+      clubs: totalClubs,
+      activities: totalActivities,
+      members: totalMembers,
+      upcomingActivities,
+    })
   }
 
   // club_admin: every count is scoped to their managedClubs.
@@ -28,5 +33,10 @@ exports.getStats = catchAsync(async (req, res, next) => {
     Activity.countDocuments({ club: { $in: managedClubIds }, status: 'upcoming' }),
   ])
 
-  success(res, 200, { totalClubs, totalActivities, totalMembers, upcomingActivities })
+  success(res, 200, {
+    clubs: totalClubs,
+    activities: totalActivities,
+    members: totalMembers,
+    upcomingActivities,
+  })
 })

@@ -9,11 +9,11 @@ const router = express.Router()
 router.get('/', clubController.listClubs)
 router.get('/:id', clubController.getClub)
 
-// Creating/editing/deleting clubs is superadmin-only. club_admin manages
-// activities, members, and attendance within an assigned club, but not the
-// club record itself.
+// Creating/deleting clubs is superadmin-only. Editing is superadmin or a
+// club_admin managing that specific club — enforced inside the controller
+// via assertManagesClub, since it needs the club id from the route param.
 router.post('/', authenticate, authorize('superadmin'), clubController.createClub)
-router.patch('/:id', authenticate, authorize('superadmin'), clubController.updateClub)
+router.patch('/:id', authenticate, authorize('superadmin', 'club_admin'), clubController.updateClub)
 router.delete('/:id', authenticate, authorize('superadmin'), clubController.deleteClub)
 
 router.post('/:id/join', authenticate, authorize('student'), membershipController.joinClub)

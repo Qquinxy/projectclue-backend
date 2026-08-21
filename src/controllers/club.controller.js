@@ -4,6 +4,7 @@ const catchAsync = require('../utils/catchAsync')
 const { success } = require('../utils/apiResponse')
 const { isValidObjectId } = require('../validators/validate')
 const { validateClubInput } = require('../validators/club.validator')
+const { assertManagesClub } = require('../utils/clubAccess')
 
 exports.listClubs = catchAsync(async (req, res, next) => {
   const { search, category } = req.query
@@ -51,11 +52,17 @@ exports.updateClub = catchAsync(async (req, res, next) => {
   if (!isValidObjectId(id)) return next(new AppError('Invalid club id', 400))
   validateClubInput(req.body, { partial: true })
 
+  const club = await Club.findById(id)
+  if (!club) return next(new AppError('Club not found', 404))
+
+  // A club_admin may only edit a club they manage; a superadmin may edit any.
+  await assertManagesClub(req.user, club._id)
+
   delete req.body.memberCount
   delete req.body.createdBy
 
-  const club = await Club.findByIdAndUpdate(id, req.body, { new: true, runValidators: true })
-  if (!club) return next(new AppError('Club not found', 404))
+  Object.assign(club, req.body)
+  await club.save()
 
   success(res, 200, { club }, 'Club updated')
 })

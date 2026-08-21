@@ -37,6 +37,7 @@ router.patch(
 
 // Club admin account management — superadmin only. No public/self-service
 // path creates club_admin or superadmin accounts.
+router.get('/users', authorize('superadmin'), adminUserController.listClubAdmins)
 router.post('/users', authorize('superadmin'), adminUserController.createClubAdmin)
 router.patch('/users/:id', authorize('superadmin'), adminUserController.updateClubAdmin)
 router.delete('/users/:id', authorize('superadmin'), adminUserController.deleteClubAdmin)
