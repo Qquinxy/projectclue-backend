@@ -3,8 +3,12 @@ const { isValidObjectId } = require('./validate')
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
+// A club_admin may manage at most one club — see the comment on
+// User.managedClubs for why the field itself stays array-shaped.
 const validateManagedClubsShape = (managedClubs) =>
-  Array.isArray(managedClubs) && managedClubs.every((id) => isValidObjectId(id))
+  Array.isArray(managedClubs) &&
+  managedClubs.length <= 1 &&
+  managedClubs.every((id) => isValidObjectId(id))
 
 exports.validateCreateClubAdminInput = (body) => {
   const { studentId, firstName, lastName, email, password, managedClubs } = body
@@ -16,7 +20,7 @@ exports.validateCreateClubAdminInput = (body) => {
   if (!email || !EMAIL_REGEX.test(email)) errors.push('a valid email is required')
   if (!password || password.length < 6) errors.push('password must be at least 6 characters')
   if (managedClubs !== undefined && !validateManagedClubsShape(managedClubs)) {
-    errors.push('managedClubs must be an array of valid club ids')
+    errors.push('managedClubs must be an array of at most one valid club id')
   }
 
   if (errors.length) throw new AppError(errors.join(', '), 400)
@@ -31,6 +35,6 @@ exports.validateUpdateClubAdminInput = (body) => {
 
 exports.validateAssignClubsInput = (body) => {
   if (!validateManagedClubsShape(body.managedClubs)) {
-    throw new AppError('managedClubs must be an array of valid club ids', 400)
+    throw new AppError('managedClubs must be an array of at most one valid club id', 400)
   }
 }

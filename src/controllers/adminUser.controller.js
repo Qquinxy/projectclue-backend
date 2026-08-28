@@ -27,6 +27,21 @@ const ensureClubsExist = async (clubIds) => {
   }
 }
 
+// Enforces the other half of the 1:1 rule: a club may not be assigned to two
+// different club_admin accounts. excludeUserId lets an admin keep (or
+// re-save) their own current club without tripping this check on themselves.
+const ensureClubsAssignable = async (clubIds, excludeUserId) => {
+  if (!clubIds || clubIds.length === 0) return
+  const conflict = await User.findOne({
+    role: 'club_admin',
+    managedClubs: { $in: clubIds },
+    ...(excludeUserId ? { _id: { $ne: excludeUserId } } : {}),
+  })
+  if (conflict) {
+    throw new AppError('This club is already managed by another club admin', 409)
+  }
+}
+
 exports.listClubAdmins = catchAsync(async (req, res, next) => {
   const users = await User.find({ role: 'club_admin' }).sort({ createdAt: -1 })
   success(res, 200, { users: users.map(sanitizeUser) })
@@ -46,6 +61,7 @@ exports.createClubAdmin = catchAsync(async (req, res, next) => {
   }
 
   await ensureClubsExist(managedClubs)
+  await ensureClubsAssignable(managedClubs)
 
   const passwordHash = await bcrypt.hash(password, SALT_ROUNDS)
 
@@ -111,6 +127,7 @@ exports.assignClubs = catchAsync(async (req, res, next) => {
   }
 
   await ensureClubsExist(req.body.managedClubs)
+  await ensureClubsAssignable(req.body.managedClubs, target._id)
 
   target.managedClubs = req.body.managedClubs
   await target.save()

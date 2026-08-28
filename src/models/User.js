@@ -14,10 +14,21 @@ const userSchema = new mongoose.Schema(
     role: { type: String, enum: ['student', 'club_admin', 'superadmin'], default: 'student' },
     profileImage: { type: String, default: '' },
     totalVolunteerHours: { type: Number, default: 0 },
-    // Clubs a club_admin is responsible for. Array-shaped so the system can
-    // support multiple clubs per admin in the future, even though the
-    // current workflow typically assigns one.
-    managedClubs: { type: [mongoose.Schema.Types.ObjectId], ref: 'Club', default: [] },
+    // Clubs a club_admin is responsible for. Kept array-shaped for payload
+    // compatibility, but the business rule is a strict 1:1: a club_admin
+    // manages at most one club (enforced here and in adminUser.validator.js/
+    // adminUser.controller.js). Pre-existing documents with more than one
+    // entry are left as-is; they're surfaced in the admin UI rather than
+    // silently truncated.
+    managedClubs: {
+      type: [mongoose.Schema.Types.ObjectId],
+      ref: 'Club',
+      default: [],
+      validate: {
+        validator: (arr) => arr.length <= 1,
+        message: 'A club admin may manage at most one club',
+      },
+    },
   },
   { timestamps: true }
 )

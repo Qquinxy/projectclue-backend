@@ -67,6 +67,23 @@ exports.updateClub = catchAsync(async (req, res, next) => {
   success(res, 200, { club }, 'Club updated')
 })
 
+exports.uploadClubImage = catchAsync(async (req, res, next) => {
+  const { id } = req.params
+  if (!isValidObjectId(id)) return next(new AppError('Invalid club id', 400))
+  if (!req.file) return next(new AppError('An image file is required', 400))
+
+  const club = await Club.findById(id)
+  if (!club) return next(new AppError('Club not found', 404))
+
+  // A club_admin may only upload for a club they manage; superadmin may for any.
+  await assertManagesClub(req.user, club._id)
+
+  club.image = `/uploads/clubs/${req.file.filename}`
+  await club.save()
+
+  success(res, 200, { club }, 'Club image uploaded')
+})
+
 exports.deleteClub = catchAsync(async (req, res, next) => {
   const { id } = req.params
   if (!isValidObjectId(id)) return next(new AppError('Invalid club id', 400))

@@ -1,4 +1,5 @@
 const express = require('express')
+const path = require('path')
 const cors = require('cors')
 const cookieParser = require('cookie-parser')
 const { FRONTEND_URL } = require('./config/env')
@@ -15,6 +16,10 @@ const app = express()
 app.use(cors({ origin: FRONTEND_URL, credentials: true }))
 app.use(express.json())
 app.use(cookieParser())
+
+// Publicly served uploaded club images — same trust level as any other
+// public club data, no auth needed to view them.
+app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')))
 
 app.get('/api/health', (req, res) => res.json({ success: true, message: 'OK' }))
 
