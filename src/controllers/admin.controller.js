@@ -4,9 +4,12 @@ const ClubMembership = require('../models/ClubMembership')
 const User = require('../models/User')
 const catchAsync = require('../utils/catchAsync')
 const { success } = require('../utils/apiResponse')
+const { hasSuperadminPowers } = require('../utils/adminAccess')
 
 exports.getStats = catchAsync(async (req, res, next) => {
-  if (req.user.role === 'superadmin') {
+  // A verified Super Admin-equivalent club_admin sees system-wide counts,
+  // exactly like a superadmin.
+  if (await hasSuperadminPowers(req.user)) {
     const [totalClubs, totalActivities, totalMembers, upcomingActivities] = await Promise.all([
       Club.countDocuments(),
       Activity.countDocuments(),

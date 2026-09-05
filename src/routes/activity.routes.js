@@ -1,6 +1,7 @@
 const express = require('express')
 const activityController = require('../controllers/activity.controller')
 const participationController = require('../controllers/participation.controller')
+const exportController = require('../controllers/export.controller')
 const authenticate = require('../middleware/authenticate')
 const authorize = require('../middleware/authorize')
 
@@ -24,6 +25,16 @@ router.get(
   authenticate,
   authorize('superadmin', 'club_admin'),
   participationController.getActivityParticipants
+)
+
+// CSV / XLSX export of the same participant list. Club ownership of the
+// activity is re-checked inside the controller (assertManagesClub), so a
+// club_admin cannot export another club's activity by swapping the id.
+router.get(
+  '/:id/participants/export',
+  authenticate,
+  authorize('superadmin', 'club_admin'),
+  exportController.exportActivityParticipants
 )
 
 module.exports = router

@@ -10,12 +10,20 @@ const mongoose = require('mongoose')
 const bcrypt = require('bcryptjs')
 const { MONGODB_URI } = require('../config/env')
 const User = require('../models/User')
+const { getPasswordErrors } = require('../utils/password')
 
 const run = async () => {
   const [, , email, password, studentId, firstName, lastName] = process.argv
 
   if (!email || !password || !studentId || !firstName || !lastName) {
     console.log('Usage: npm run seed:admin -- <email> <password> <studentId> <firstName> <lastName>')
+    process.exit(1)
+  }
+
+  // Same password policy the HTTP endpoints enforce.
+  const passwordErrors = getPasswordErrors(password)
+  if (passwordErrors.length) {
+    console.error(`Password rejected: ${passwordErrors.join(', ')}`)
     process.exit(1)
   }
 
@@ -38,6 +46,10 @@ const run = async () => {
       faculty: '-',
       major: '-',
       year: 0,
+      // Created out-of-band by someone with CLI + database access, so the
+      // address is treated as already confirmed.
+      emailVerified: true,
+      emailVerifiedAt: new Date(),
     })
     console.log(`Superadmin user ${email} created`)
   }

@@ -40,7 +40,16 @@ router.patch(
 router.get('/users', authorize('superadmin'), adminUserController.listClubAdmins)
 router.post('/users', authorize('superadmin'), adminUserController.createClubAdmin)
 router.patch('/users/:id', authorize('superadmin'), adminUserController.updateClubAdmin)
-router.delete('/users/:id', authorize('superadmin'), adminUserController.deleteClubAdmin)
+// Revokes the club_admin position (role -> student) — it does NOT delete the
+// account or any membership/participation history. Same URL as before so no
+// client changes are required.
+router.delete('/users/:id', authorize('superadmin'), adminUserController.removeClubAdmin)
 router.patch('/users/:id/clubs', authorize('superadmin'), adminUserController.assignClubs)
+
+// Super Admin-equivalent appointment. authorize('superadmin') lets an
+// elevated club_admin through, so the controller additionally requires a
+// real superadmin — an elevated admin cannot appoint or demote anyone.
+router.post('/users/:id/elevate', authorize('superadmin'), adminUserController.elevateClubAdmin)
+router.delete('/users/:id/elevate', authorize('superadmin'), adminUserController.revokeClubAdminElevation)
 
 module.exports = router

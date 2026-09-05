@@ -1,4 +1,6 @@
 const Club = require('../models/Club')
+const Activity = require('../models/Activity')
+const ClubMembership = require('../models/ClubMembership')
 const AppError = require('../utils/AppError')
 const catchAsync = require('../utils/catchAsync')
 const { success } = require('../utils/apiResponse')
@@ -88,8 +90,34 @@ exports.deleteClub = catchAsync(async (req, res, next) => {
   const { id } = req.params
   if (!isValidObjectId(id)) return next(new AppError('Invalid club id', 400))
 
-  const club = await Club.findByIdAndDelete(id)
+  // Fetched (not findByIdAndDelete) so the related-records guard below can run
+  // before anything is removed. The route is already superadmin-only.
+  const club = await Club.findById(id)
   if (!club) return next(new AppError('Club not found', 404))
+
+  // Same reasoning as deleteActivity: deleting a club would orphan its
+  // activities and memberships — and, transitively, the attendance records
+  // hanging off those activities. Nothing is cascade-deleted here; the club
+  // simply cannot be removed while dependent records exist.
+  const [activityCount, membershipCount] = await Promise.all([
+    Activity.countDocuments({ club: id }),
+    ClubMembership.countDocuments({ club: id }),
+  ])
+
+  if (activityCount > 0 || membershipCount > 0) {
+    const parts = []
+    if (activityCount > 0) parts.push(`${activityCount} activity/activities`)
+    if (membershipCount > 0) parts.push(`${membershipCount} member(s)`)
+    return next(
+      new AppError(
+        `This club cannot be deleted because it still has ${parts.join(' and ')}. ` +
+          'Remove or cancel those records first — deleting the club would orphan attendance history and volunteer hours.',
+        409
+      )
+    )
+  }
+
+  await Club.deleteOne({ _id: id })
 
   success(res, 200, null, 'Club deleted')
 })

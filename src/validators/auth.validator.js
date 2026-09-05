@@ -1,4 +1,5 @@
 const AppError = require('../utils/AppError')
+const { getPasswordErrors } = require('../utils/password')
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 // New student registrations only — 11 digits, a dash, then 1 digit
@@ -16,7 +17,9 @@ exports.validateRegisterInput = (body) => {
   if (!firstName) errors.push('firstName is required')
   if (!lastName) errors.push('lastName is required')
   if (!email || !EMAIL_REGEX.test(email)) errors.push('a valid email is required')
-  if (!password || password.length < 6) errors.push('password must be at least 6 characters')
+  // Password policy lives in utils/password.js and is enforced server-side
+  // regardless of what the frontend allowed through.
+  errors.push(...getPasswordErrors(password))
   if (!faculty) errors.push('faculty is required')
   if (!major) errors.push('major is required')
   if (year === undefined || year === null || isNaN(Number(year))) errors.push('year must be a number')
@@ -32,4 +35,12 @@ exports.validateLoginInput = (body) => {
   if (!password) errors.push('password is required')
 
   if (errors.length) throw new AppError(errors.join(', '), 400)
+}
+
+// Used by the resend-verification endpoint.
+exports.validateEmailOnlyInput = (body) => {
+  const { email } = body
+  if (!email || !EMAIL_REGEX.test(email)) {
+    throw new AppError('a valid email is required', 400)
+  }
 }

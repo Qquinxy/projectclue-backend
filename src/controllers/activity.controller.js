@@ -1,4 +1,5 @@
 const Activity = require('../models/Activity')
+const ActivityParticipation = require('../models/ActivityParticipation')
 const Club = require('../models/Club')
 const AppError = require('../utils/AppError')
 const catchAsync = require('../utils/catchAsync')
@@ -92,7 +93,31 @@ exports.deleteActivity = catchAsync(async (req, res, next) => {
   const activity = await Activity.findById(id)
   if (!activity) return next(new AppError('Activity not found', 404))
 
+  // Authorization is resolved BEFORE the participation guard, so an admin
+  // acting outside their clubs still gets 403 rather than learning whether
+  // the activity has participants.
   await assertManagesClub(req.user, activity.club)
+
+  // Attendance records are academic data: hoursEarned on a participation
+  // feeds users.totalVolunteerHours, which students are graded against.
+  // Hard-deleting the activity would leave those participations pointing at
+  // nothing — the rows survive, but their activity can no longer be resolved,
+  // which is exactly how the existing dangling records were produced.
+  //
+  // So once anyone has registered, the activity may only be retired by
+  // setting status to "cancelled" (already part of ACTIVITY_STATUSES and
+  // already handled everywhere in the UI). Deleting an activity nobody
+  // signed up for stays allowed, since that destroys nothing.
+  const participationCount = await ActivityParticipation.countDocuments({ activity: id })
+  if (participationCount > 0) {
+    return next(
+      new AppError(
+        `This activity cannot be deleted because it has ${participationCount} participant record(s). ` +
+          'Set the activity status to "cancelled" instead — that keeps attendance history and volunteer hours intact.',
+        409
+      )
+    )
+  }
 
   await Activity.deleteOne({ _id: id })
 
