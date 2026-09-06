@@ -30,4 +30,7 @@ module.exports = {
   SMTP_USER: process.env.SMTP_USER,
   SMTP_PASSWORD: process.env.SMTP_PASSWORD,
   MAIL_FROM: process.env.MAIL_FROM,
+
+  // --- Clerk (Google OAuth) ---
+  CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
 }
