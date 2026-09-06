@@ -2,7 +2,7 @@ const mongoose = require('mongoose')
 
 const userSchema = new mongoose.Schema(
   {
-    clerkId: { type: String, default: null, sparse: true },
+    googleId: { type: String, default: null, sparse: true },
     studentId: { type: String, required: true, unique: true, trim: true },
     firstName: { type: String, required: true, trim: true },
     lastName: { type: String, required: true, trim: true },

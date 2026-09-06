@@ -1,14 +1,22 @@
-const { verifyToken, createClerkClient } = require('@clerk/backend')
-const bcrypt = require('bcryptjs')
 const crypto = require('crypto')
+const bcrypt = require('bcryptjs')
 const User = require('../models/User')
 const AppError = require('../utils/AppError')
 const catchAsync = require('../utils/catchAsync')
-const { success } = require('../utils/apiResponse')
 const { signToken } = require('../utils/jwt')
-const { NODE_ENV, CLERK_SECRET_KEY } = require('../config/env')
+const {
+  NODE_ENV,
+  FRONTEND_URL,
+  GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET,
+  GOOGLE_REDIRECT_URI,
+} = require('../config/env')
 
 const COOKIE_NAME = 'token'
+const STATE_COOKIE = 'oauth_state'
+const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
+const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
+const GOOGLE_USERINFO_URL = 'https://www.googleapis.com/oauth2/v3/userinfo'
 const GOOGLE_STUDENT_ID_PREFIX = 'GC-'
 
 const cookieOptions = () => ({
@@ -16,6 +24,16 @@ const cookieOptions = () => ({
   secure: NODE_ENV === 'production',
   sameSite: NODE_ENV === 'production' ? 'none' : 'lax',
   maxAge: 7 * 24 * 60 * 60 * 1000,
+})
+
+// The CSRF `state` cookie is short-lived and always SameSite=Lax so it rides
+// along on the top-level GET navigation that the browser makes to the
+// callback after Google's consent screen.
+const stateCookieOptions = () => ({
+  httpOnly: true,
+  secure: NODE_ENV === 'production',
+  sameSite: 'lax',
+  maxAge: 10 * 60 * 1000,
 })
 
 const sanitizeUser = (user) => {
@@ -28,15 +46,34 @@ const sanitizeUser = (user) => {
   return obj
 }
 
-const clerkClient = () => (CLERK_SECRET_KEY ? createClerkClient({ secretKey: CLERK_SECRET_KEY }) : null)
+const frontendBase = () => FRONTEND_URL.replace(/\/+$/, '')
+
+const assertGoogleConfigured = () => {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    throw new AppError('Google OAuth is not configured on the server', 500)
+  }
+}
+
+// When GOOGLE_REDIRECT_URI is unset, derive it from the incoming request so
+// the same callback works on localhost and behind a reverse proxy (the
+// request URI is always that of the backend itself).
+const redirectUriFor = (req) =>
+  GOOGLE_REDIRECT_URI || `${req.protocol}://${req.get('host')}/api/auth/google/callback`
+
+const clearStateCookie = (res) => {
+  res.clearCookie(STATE_COOKIE, {
+    httpOnly: true,
+    secure: NODE_ENV === 'production',
+    sameSite: 'lax',
+  })
+}
 
 // Keeps the auto-created student ID unique when real IDs are unknown. If the
 // generated one somehow collides, append a random suffix and retry.
-const generateStudentId = async (clerkUserId) => {
-  const base = `${GOOGLE_STUDENT_ID_PREFIX}${clerkUserId.slice(-10)}`
+const generateStudentId = async (googleId) => {
+  const base = `${GOOGLE_STUDENT_ID_PREFIX}${googleId.slice(-10)}`
   let candidate = base
   let tries = 0
-  // The User model tolerates any string; uniqueness is the only constraint.
   while (tries < 3 && (await User.findOne({ studentId: candidate }))) {
     tries += 1
     candidate = `${base.slice(0, -2)}${tries}${Math.floor(Math.random() * 90 + 10)}`
@@ -44,64 +81,103 @@ const generateStudentId = async (clerkUserId) => {
   return candidate
 }
 
-exports.googleLogin = catchAsync(async (req, res, next) => {
-  const { token: clerkToken } = req.body
+// --- Step 1: send the user to Google's consent screen ---------------------
 
-  if (!clerkToken || typeof clerkToken !== 'string') {
-    return next(new AppError('Clerk session token is required', 400))
-  }
-
-  const client = clerkClient()
-  if (!client) {
-    return next(new AppError('Clerk is not configured on the server', 500))
-  }
-
-  let clerkUserId
+exports.redirectToGoogle = catchAsync(async (req, res, next) => {
   try {
-    const sessionPayload = await verifyToken(clerkToken, { secretKey: CLERK_SECRET_KEY })
-    clerkUserId = sessionPayload.sub
-  } catch {
-    return next(new AppError('Invalid or expired Clerk token', 401))
+    assertGoogleConfigured()
+  } catch (err) {
+    return next(err)
   }
 
-  // Session tokens carry no profile claims — fetch the real user from Clerk.
-  let clerkUser
+  const state = crypto.randomBytes(16).toString('hex')
+  res.cookie(STATE_COOKIE, state, stateCookieOptions())
+
+  const params = new URLSearchParams({
+    client_id: GOOGLE_CLIENT_ID,
+    redirect_uri: redirectUriFor(req),
+    response_type: 'code',
+    scope: 'openid email profile',
+    state,
+    access_type: 'online',
+    include_granted_scopes: 'true',
+  })
+
+  res.redirect(`${GOOGLE_AUTH_URL}?${params.toString()}`)
+})
+
+// --- Step 2: Google returns here; exchange the code for a session ---------
+
+exports.googleCallback = catchAsync(async (req, res, next) => {
+  const { code, state, error } = req.query
+  const failRedirect = (errCode) => res.redirect(`${frontendBase()}/login?error=${errCode}`)
+
+  // User cancelled / denied the Google consent prompt.
+  if (error) return failRedirect('google_denied')
+
+  // CSRF guard: the `state` must match the cookie we set in step 1.
+  if (!state || !req.cookies?.[STATE_COOKIE] || state !== req.cookies[STATE_COOKIE]) {
+    clearStateCookie(res)
+    return failRedirect('google_state')
+  }
+  clearStateCookie(res)
+
+  if (!code) return failRedirect('google_no_code')
+
+  const redirectUri = redirectUriFor(req)
+
+  // Exchange the authorization code for an access token.
+  let profile
   try {
-    clerkUser = await client.users.getUser(clerkUserId)
+    const tokenRes = await fetch(GOOGLE_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        redirect_uri: redirectUri,
+        grant_type: 'authorization_code',
+      }),
+    })
+    const tokenData = await tokenRes.json()
+    if (!tokenRes.ok || !tokenData.access_token) return failRedirect('google_token_failed')
+
+    const infoRes = await fetch(GOOGLE_USERINFO_URL, {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    })
+    if (!infoRes.ok) return failRedirect('google_userinfo_failed')
+    profile = await infoRes.json()
   } catch {
-    return next(new AppError('Could not verify the Google account', 401))
+    return failRedirect('google_failed')
   }
 
-  const email = clerkUser.primaryEmailAddress?.emailAddress || clerkUser.emailAddresses?.[0]?.emailAddress
-  if (!email) {
-    return next(new AppError('No email found on the Google account', 400))
+  // Google only provides the address if the account is verified; require it.
+  const email = profile.email
+  if (!email || profile.email_verified !== true) {
+    return failRedirect('google_unverified_email')
   }
 
-  const firstName = clerkUser.firstName || ''
-  const lastName = clerkUser.lastName || ''
-  const imageUrl = clerkUser.imageUrl || ''
-
-  // Find the existing account by Clerk ID first, then by email — so a
-  // Google sign-in on an account that already has an email+password login
-  // links the two identities.
-  let user = await User.findOne({ clerkId: clerkUserId })
+  // Link by Google ID first, then by email — so a Google sign-in on an
+  // account that already has an email+password login links the two.
+  let user = await User.findOne({ googleId: profile.sub })
   if (!user) {
     user = await User.findOne({ email: email.toLowerCase() })
   }
 
   if (user) {
-    if (!user.clerkId) {
-      user.clerkId = clerkUserId
-      if (imageUrl && !user.profileImage) user.profileImage = imageUrl
+    if (!user.googleId) {
+      user.googleId = profile.sub
+      if (profile.picture && !user.profileImage) user.profileImage = profile.picture
       await user.save()
     }
   } else {
-    const studentId = await generateStudentId(clerkUserId)
+    const studentId = await generateStudentId(profile.sub)
     user = await User.create({
-      clerkId: clerkUserId,
+      googleId: profile.sub,
       studentId,
-      firstName: firstName || 'Google',
-      lastName: lastName || 'User',
+      firstName: profile.given_name || 'Google',
+      lastName: profile.family_name || 'User',
       email: email.toLowerCase(),
       // Not password-login capable (no password); the hash field is required
       // by the schema, so a random bcrypt hash marks Google-only accounts —
@@ -110,12 +186,13 @@ exports.googleLogin = catchAsync(async (req, res, next) => {
       role: 'student',
       emailVerified: true,
       emailVerifiedAt: new Date(),
-      profileImage: imageUrl,
+      profileImage: profile.picture || '',
     })
   }
 
   const jwtToken = signToken({ sub: user._id.toString(), role: user.role })
   res.cookie(COOKIE_NAME, jwtToken, cookieOptions())
 
-  success(res, 200, { user: sanitizeUser(user) }, 'Google login successful')
+  const isAdmin = user.role === 'superadmin' || user.role === 'club_admin'
+  res.redirect(`${frontendBase()}${isAdmin ? '/admin' : '/dashboard'}`)
 })

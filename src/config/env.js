@@ -31,6 +31,10 @@ module.exports = {
   SMTP_PASSWORD: process.env.SMTP_PASSWORD,
   MAIL_FROM: process.env.MAIL_FROM,
 
-  // --- Clerk (Google OAuth) ---
-  CLERK_SECRET_KEY: process.env.CLERK_SECRET_KEY,
+  // --- Google OAuth (direct Google sign-in) ---
+  GOOGLE_CLIENT_ID: process.env.GOOGLE_CLIENT_ID,
+  GOOGLE_CLIENT_SECRET: process.env.GOOGLE_CLIENT_SECRET,
+  // Optional; defaults to <backend>/api/auth/google/callback derived from the
+  // request, so the same callback works locally and behind a proxy.
+  GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI,
 }

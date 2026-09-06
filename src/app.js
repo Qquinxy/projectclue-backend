@@ -13,6 +13,10 @@ const studentRoutes = require('./routes/student.routes')
 
 const app = express()
 
+// Behind nginx/reverse proxy so req.protocol honors X-Forwarded-Proto (used
+// to build the Google OAuth redirect URI in production).
+app.set('trust proxy', 1)
+
 app.use(cors({ origin: FRONTEND_URL, credentials: true }))
 app.use(express.json())
 app.use(cookieParser())
