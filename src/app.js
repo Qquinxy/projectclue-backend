@@ -10,6 +10,7 @@ const clubRoutes = require('./routes/club.routes')
 const activityRoutes = require('./routes/activity.routes')
 const adminRoutes = require('./routes/admin.routes')
 const studentRoutes = require('./routes/student.routes')
+const referenceRoutes = require('./routes/reference.routes')
 
 const app = express()
 
@@ -32,6 +33,7 @@ app.use('/api/clubs', clubRoutes)
 app.use('/api/activities', activityRoutes)
 app.use('/api/admin', adminRoutes)
 app.use('/api/students', studentRoutes)
+app.use('/api/reference-data', referenceRoutes)
 
 app.use((req, res) => {
   res.status(404).json({ success: false, message: 'Route not found' })

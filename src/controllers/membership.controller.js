@@ -1,11 +1,26 @@
 const mongoose = require('mongoose')
 const Club = require('../models/Club')
 const ClubMembership = require('../models/ClubMembership')
+const User = require('../models/User')
 const AppError = require('../utils/AppError')
 const catchAsync = require('../utils/catchAsync')
 const { success } = require('../utils/apiResponse')
 const { isValidObjectId } = require('../validators/validate')
 const { assertManagesClub } = require('../utils/clubAccess')
+
+// Whether a profile carries enough academic info for the club / activity
+// system to give other students (and their club) something real to work with.
+// Google-login accounts start empty except for name/email, so this is what
+// gates joinClub until they fill the profile in.
+exports.isProfileComplete = (user) => {
+  if (!user) return false
+  return Boolean(
+    user.phone && String(user.phone).trim() &&
+    user.faculty && String(user.faculty).trim() &&
+    user.major && String(user.major).trim() &&
+    user.year
+  )
+}
 
 // Joining is immediate — no approval/rejection workflow. The membership
 // document is created directly with an active state (its mere existence
@@ -14,6 +29,13 @@ const { assertManagesClub } = require('../utils/clubAccess')
 exports.joinClub = catchAsync(async (req, res, next) => {
   const clubId = req.params.id
   if (!isValidObjectId(clubId)) return next(new AppError('Invalid club id', 400))
+
+  const student = await User.findById(req.user.id)
+  if (!student) return next(new AppError('Account not found', 404))
+
+  if (!exports.isProfileComplete(student)) {
+    return next(new AppError('กรุณากรอกข้อมูลส่วนตัวให้ครบ (เบอร์โทรศัพท์, ชั้นปี, คณะ, สาขาวิชา) ก่อนสมัครเข้าร่วมชมรม', 400))
+  }
 
   const session = await mongoose.startSession()
   try {

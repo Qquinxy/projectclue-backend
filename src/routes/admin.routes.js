@@ -2,6 +2,7 @@ const express = require('express')
 const adminController = require('../controllers/admin.controller')
 const participationController = require('../controllers/participation.controller')
 const adminUserController = require('../controllers/adminUser.controller')
+const referenceController = require('../controllers/reference.controller')
 const authenticate = require('../middleware/authenticate')
 const authorize = require('../middleware/authorize')
 
@@ -51,5 +52,12 @@ router.patch('/users/:id/clubs', authorize('superadmin'), adminUserController.as
 // real superadmin — an elevated admin cannot appoint or demote anyone.
 router.post('/users/:id/elevate', authorize('superadmin'), adminUserController.elevateClubAdmin)
 router.delete('/users/:id/elevate', authorize('superadmin'), adminUserController.revokeClubAdminElevation)
+
+// Reference data (faculties / years / majors) — managed by superadmin. The
+// public list endpoint lives in reference.routes.js.
+router.get('/reference-data', authorize('superadmin'), referenceController.adminList)
+router.post('/reference-data', authorize('superadmin'), referenceController.createReference)
+router.patch('/reference-data/:id', authorize('superadmin'), referenceController.updateReference)
+router.delete('/reference-data/:id', authorize('superadmin'), referenceController.deleteReference)
 
 module.exports = router
