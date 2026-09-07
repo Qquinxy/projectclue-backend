@@ -28,6 +28,9 @@ const assertValid = (body, { requireAll } = {}) => {
   if (type !== undefined && !TYPES.includes(type)) {
     throw new AppError(`type must be one of: ${TYPES.join(', ')}`, 400)
   }
+  if (type === 'year' && value !== undefined && !/^\d+$/.test(String(value).trim())) {
+    throw new AppError('year value must be a number', 400)
+  }
   if (requireAll) {
     if (!value) throw new AppError('value is required', 400)
   }

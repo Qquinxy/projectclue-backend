@@ -161,6 +161,14 @@ const main = async () => {
     assert(err && err.statusCode === 400, 'status ' + (err && err.statusCode))
   })
 
+  await t('non-numeric year value is 400', async () => {
+    const { err } = await run(referenceController.createReference, {
+      body: { type: 'year', value: 'ปี 5' },
+    })
+    assert(err && err.statusCode === 400, 'status ' + (err && err.statusCode))
+    assert(/year value must be a number/.test(err.message), err.message)
+  })
+
   await t('update renames label (value kept)', async () => {
     const item = refStore.find((i) => i.value === '1')
     const { res, err } = await run(referenceController.updateReference, {
