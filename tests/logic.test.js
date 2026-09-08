@@ -1,6 +1,5 @@
-// Pure-logic tests (no DB/SMTP required)
+// Pure-logic tests (no DB required)
 const { getPasswordErrors, isStrongPassword } = require('../src/utils/password')
-const { createVerificationToken, hashToken } = require('../src/utils/verificationToken')
 const { validateRegisterInput } = require('../src/validators/auth.validator')
 const { validateCreateClubAdminInput, validateAssignClubsInput } = require('../src/validators/adminUser.validator')
 
@@ -18,14 +17,6 @@ t('reject no lowercase', () => assert(getPasswordErrors('ABCDEFG1@').some(e => /
 t('reject no number', () => assert(getPasswordErrors('Abcdefgh@').some(e => /number/.test(e))))
 t('reject no special', () => assert(getPasswordErrors('Abcdefg1').some(e => /special/.test(e))))
 t('empty password required', () => assert(getPasswordErrors('').length === 1))
-
-console.log('\n== VERIFICATION TOKEN ==')
-const { rawToken, tokenHash, expiresAt } = createVerificationToken()
-t('raw token is 64 hex chars', () => assert(/^[0-9a-f]{64}$/.test(rawToken)))
-t('hash != raw (hash stored, not raw)', () => assert(tokenHash !== rawToken))
-t('hash is deterministic sha256', () => assert(hashToken(rawToken) === tokenHash))
-t('expiry ~24h ahead', () => { const h = (expiresAt - Date.now())/36e5; assert(h > 23.9 && h < 24.1, 'got ' + h) })
-t('tokens are unique', () => assert(createVerificationToken().rawToken !== createVerificationToken().rawToken))
 
 console.log('\n== REGISTER VALIDATION (backend enforces policy) ==')
 const base = { studentId: '67543206105-8', firstName: 'A', lastName: 'B', email: 'a@b.co', faculty: 'F', major: 'M', year: 1 }

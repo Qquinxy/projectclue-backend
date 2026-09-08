@@ -1,10 +1,14 @@
-// OPTIONAL, non-destructive backfill for accounts that existed before email
-// verification was introduced.
+// OPTIONAL, non-destructive, purely cosmetic backfill.
 //
-// It is not required: login only blocks on an explicit `emailVerified: false`,
-// so legacy accounts (which have no such field) already keep working. Run this
-// only if you prefer every existing account to carry an explicit
-// `emailVerified: true` flag.
+// Email verification has been REMOVED from the system: nothing reads
+// `emailVerified` as a gate any more, so no account is blocked by it and this
+// script is not required for anything to work. Run it only if you want every
+// existing document to carry an explicit `emailVerified: true` flag for
+// consistency with what registration and Google sign-in now write.
+//
+// It only fills in accounts that have NO `emailVerified` field at all. It will
+// not change an account already flagged `false` — such accounts can log in
+// normally regardless.
 //
 // It never deletes anything and never touches accounts that already have the
 // field set (in particular, it will NOT verify a pending new registration).

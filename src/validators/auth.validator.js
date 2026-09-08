@@ -37,10 +37,3 @@ exports.validateLoginInput = (body) => {
   if (errors.length) throw new AppError(errors.join(', '), 400)
 }
 
-// Used by the resend-verification endpoint.
-exports.validateEmailOnlyInput = (body) => {
-  const { email } = body
-  if (!email || !EMAIL_REGEX.test(email)) {
-    throw new AppError('a valid email is required', 400)
-  }
-}

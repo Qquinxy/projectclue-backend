@@ -1,6 +1,6 @@
 // Covers "Remove Club Admin": the position must be revoked WITHOUT deleting
 // the user account or any of their history, and all elevated access must stop
-// immediately. Models and mail are stubbed — no database, no SMTP.
+// immediately. Models are stubbed — no database needed.
 // Run: node tests/removeClubAdmin.test.js
 process.env.MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/test'
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret'
@@ -74,15 +74,6 @@ require.cache[require.resolve('../src/models/Club')] = {
   exports: { countDocuments: async (q) => (q?._id?.$in ? q._id.$in.length : 0) },
 }
 
-const sent = []
-require.cache[require.resolve('../src/services/email.service')] = {
-  exports: {
-    isEmailConfigured: () => true,
-    sendVerificationEmail: async ({ to, token }) => sent.push({ kind: 'verification', to, token }),
-    sendElevationEmail: async ({ to, token }) => sent.push({ kind: 'elevation', to, token }),
-  },
-}
-
 // Membership / participation history must survive untouched.
 const memberships = [{ _id: 'm1', student: null, club: 'c1' }]
 const participations = [{ _id: 'p1', student: null, activity: 'a1', status: 'attended', hoursEarned: 6 }]
@@ -110,7 +101,6 @@ const authController = require('../src/controllers/auth.controller')
 const authorize = require('../src/middleware/authorize')
 const { assertManagesClub } = require('../src/utils/clubAccess')
 const { hasSuperadminPowers } = require('../src/utils/adminAccess')
-const { hashToken } = require('../src/utils/verificationToken')
 
 const mockRes = () => {
   const res = { statusCode: null, body: null, cookies: {} }
@@ -140,7 +130,7 @@ const CLUB_B = '507f1f77bcf86cd799439012'
 // The superadmin needs to exist for the DB-backed role resolution.
 store.push(new FakeUser({ _id: 'root', role: 'superadmin', email: 'root@x.co' }))
 
-const makeVerifiedClubAdmin = async (n, clubs = [CLUB_A]) => {
+const makeClubAdmin = async (n, clubs = [CLUB_A]) => {
   await run(adminUserController.createClubAdmin, {
     user: superadmin,
     body: {
@@ -153,8 +143,6 @@ const makeVerifiedClubAdmin = async (n, clubs = [CLUB_A]) => {
     },
   })
   const account = store.find((u) => u.email === `remove${n}@live.rmutl.ac.th`)
-  const token = sent.filter((s) => s.kind === 'verification' && s.to === account.email).pop().token
-  await run(authController.verifyEmail, { body: { token } })
   account.totalVolunteerHours = 12 // pre-existing history to protect
   return account
 }
@@ -162,7 +150,7 @@ const makeVerifiedClubAdmin = async (n, clubs = [CLUB_A]) => {
 const main = async () => {
   console.log('\n== REMOVAL REVOKES THE POSITION, KEEPS THE ACCOUNT ==')
 
-  const admin = await makeVerifiedClubAdmin(1, [CLUB_A, CLUB_B])
+  const admin = await makeClubAdmin(1, [CLUB_A, CLUB_B])
   const adminId = admin._id
 
   await t('removal succeeds', async () => {
@@ -246,11 +234,9 @@ const main = async () => {
 
   console.log('\n== REMOVING AN ELEVATED ADMIN FREES THE SLOT ==')
 
-  const elevated = await makeVerifiedClubAdmin(2)
-  await t('set up: promote and confirm the appointment', async () => {
+  const elevated = await makeClubAdmin(2)
+  await t('set up: promote (active immediately)', async () => {
     await run(adminUserController.elevateClubAdmin, { user: superadmin, params: { id: elevated._id } })
-    const token = sent.filter((s) => s.kind === 'elevation' && s.to === elevated.email).pop().token
-    await run(authController.verifyEmail, { body: { token } })
     assert(elevated.elevatedAdmin === true, 'not elevated')
     assert((await hasSuperadminPowers({ id: elevated._id, role: 'club_admin' })) === true)
   })
@@ -273,20 +259,18 @@ const main = async () => {
   })
 
   await t('the freed slot is immediately usable by someone else', async () => {
-    const a = await makeVerifiedClubAdmin(3)
-    const b = await makeVerifiedClubAdmin(4)
+    const a = await makeClubAdmin(3)
+    const b = await makeClubAdmin(4)
     for (const target of [a, b]) {
       const { err } = await run(adminUserController.elevateClubAdmin, {
         user: superadmin,
         params: { id: target._id },
       })
       assert(!err, 'promotion failed: ' + (err && err.message))
-      const token = sent.filter((s) => s.kind === 'elevation' && s.to === target.email).pop().token
-      await run(authController.verifyEmail, { body: { token } })
       assert(target.elevatedAdmin === true, target.email + ' not activated')
     }
     // Cap still holds afterwards.
-    const c = await makeVerifiedClubAdmin(5)
+    const c = await makeClubAdmin(5)
     const { err } = await run(adminUserController.elevateClubAdmin, {
       user: superadmin,
       params: { id: c._id },
@@ -294,38 +278,33 @@ const main = async () => {
     assert(err && err.statusCode === 409, 'cap not enforced after removal')
   })
 
-  console.log('\n== REMOVAL INVALIDATES AN OUTSTANDING INVITATION ==')
+  console.log('\n== REMOVAL CLEARS A LEGACY PENDING FLAG ==')
 
-  await t('a pending appointment cannot be redeemed after removal', async () => {
-    // Free a slot, invite a new admin, then remove them before they confirm.
+  await t('removal clears elevatedAdminPending left by the retired flow', async () => {
+    // Free a slot first so the assertions below are not confused by the cap.
     const holders = store.filter((u) => u.elevatedAdmin === true)
     await run(adminUserController.revokeClubAdminElevation, {
       user: superadmin,
       params: { id: holders[0]._id },
     })
 
-    const invitee = await makeVerifiedClubAdmin(6)
-    await run(adminUserController.elevateClubAdmin, { user: superadmin, params: { id: invitee._id } })
-    const token = sent.filter((s) => s.kind === 'elevation' && s.to === invitee.email).pop().token
-    assert(invitee.elevatedAdminPending === true, 'invitation not pending')
+    const legacy = await makeClubAdmin(6)
+    legacy.elevatedAdminPending = true // as written by the retired email flow
 
-    await run(adminUserController.removeClubAdmin, { user: superadmin, params: { id: invitee._id } })
-    assert(invitee.elevatedAdminPending !== true, 'still pending after removal')
-    assert(invitee.elevatedAdminTokenHash === null, 'invitation token still redeemable')
-
-    const { err } = await run(authController.verifyEmail, { body: { token } })
-    assert(err && err.statusCode === 400, 'stale invitation was accepted: ' + (err && err.statusCode))
-    assert(invitee.elevatedAdmin !== true, 'privilege granted from a revoked invitation')
-    assert(invitee.role === 'student', 'role = ' + invitee.role)
+    await run(adminUserController.removeClubAdmin, { user: superadmin, params: { id: legacy._id } })
+    assert(legacy.elevatedAdminPending !== true, 'still pending after removal')
+    assert(legacy.elevatedAdmin !== true, 'privilege granted')
+    assert(legacy.role === 'student', 'role = ' + legacy.role)
+    assert((await hasSuperadminPowers({ id: legacy._id, role: 'club_admin' })) === false)
   })
 
-  await t('the invitation slot it held is released too', async () => {
-    const spare = await makeVerifiedClubAdmin(7)
+  await t('a slot is still available afterwards', async () => {
+    const spare = await makeClubAdmin(7)
     const { err } = await run(adminUserController.elevateClubAdmin, {
       user: superadmin,
       params: { id: spare._id },
     })
-    assert(!err, 'slot was not released: ' + (err && err.message))
+    assert(!err, 'slot was not available: ' + (err && err.message))
   })
 
   console.log('\n== GUARDS ==')

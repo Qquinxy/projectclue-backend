@@ -1,6 +1,7 @@
-// Exercises the Super Admin-equivalent appointment: the 2-person cap, the
-// email-confirmation gate, revoke/re-promote, and the permission wiring.
-// Models and the mail transport are stubbed, so no database or SMTP needed.
+// Exercises the Super Admin-equivalent appointment: the 2-person cap, direct
+// activation, revoke/re-promote, and the permission wiring.
+// Models are stubbed, so no database is needed. Email verification has been
+// removed, so a grant from a root superadmin activates immediately.
 // Run: node tests/elevation.test.js
 process.env.MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/test'
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret'
@@ -72,23 +73,6 @@ FakeUser.find = (query) => {
 }
 require.cache[require.resolve('../src/models/User')] = { exports: FakeUser }
 
-// --- stub the mail transport -------------------------------------------
-const sent = []
-let mailFailure = null
-require.cache[require.resolve('../src/services/email.service')] = {
-  exports: {
-    isEmailConfigured: () => true,
-    sendVerificationEmail: async ({ to, token }) => {
-      if (mailFailure) throw mailFailure
-      sent.push({ kind: 'verification', to, token })
-    },
-    sendElevationEmail: async ({ to, token }) => {
-      if (mailFailure) throw mailFailure
-      sent.push({ kind: 'elevation', to, token })
-    },
-  },
-}
-
 // Stubbed BEFORE the controllers are required, so they pick up the stub
 // rather than the real (unconnected) Mongoose model.
 require.cache[require.resolve('../src/models/Club')] = {
@@ -153,89 +137,63 @@ const makeClubAdmin = async (n, extra = {}) => {
   return { created, res }
 }
 
-// Confirms an account's email the way the real flow does.
-const verifyEmailOf = async (account) => {
-  const token = sent.filter((s) => s.kind === 'verification' && s.to === account.email).pop().token
-  const { err } = await run(authController.verifyEmail, { body: { token } })
-  if (err) throw new Error('verify failed: ' + err.message)
-}
+const elevate = (id, user = superadmin) =>
+  run(adminUserController.elevateClubAdmin, { user, params: { id } })
+const revoke = (id, user = superadmin) =>
+  run(adminUserController.revokeClubAdminElevation, { user, params: { id } })
 
 const main = async () => {
-  console.log('\n== CLUB ADMIN CREATION GOES THROUGH EMAIL VERIFICATION ==')
+  console.log('\n== CLUB ADMIN CREATION IS IMMEDIATE (no email verification) ==')
 
   let adminA
-  await t('created club admin is unverified and gets a verification email', async () => {
+  await t('created club admin is already verified', async () => {
     const { created, res } = await makeClubAdmin(1)
     adminA = created
     assert(res.statusCode === 201, 'status ' + res.statusCode)
-    assert(created.emailVerified === false, 'emailVerified=' + created.emailVerified)
-    assert(res.body.data.verificationEmailSent === true)
-    const mail = sent.filter((s) => s.kind === 'verification' && s.to === created.email)
-    assert(mail.length === 1, 'emails sent: ' + mail.length)
-    assert(/^[0-9a-f]{64}$/.test(mail[0].token), 'not a real token')
+    assert(created.emailVerified === true, 'emailVerified=' + created.emailVerified)
+    assert(created.emailVerifiedAt instanceof Date, 'emailVerifiedAt not set')
   })
 
-  await t('created club admin cannot log in before verifying (no bypass)', async () => {
-    const { err } = await run(authController.login, {
-      body: { email: adminA.email, password: STRONG_PW },
-    })
-    assert(err && err.statusCode === 403, 'status ' + (err && err.statusCode))
-    assert(/verify your email/i.test(err.message), err.message)
+  await t('creation response carries no verification fields', async () => {
+    const { created, res } = await makeClubAdmin(90)
+    assert(res.body.data.verificationEmailSent === undefined, 'verificationEmailSent returned')
+    assert(!/verif/i.test(res.body.message), 'message mentions verification: ' + res.body.message)
+    assert(created.emailVerificationTokenHash === undefined, 'token hash written')
   })
 
-  await t('only the token hash is stored for the club admin', async () => {
-    assert(adminA.emailVerificationTokenHash.length === 64)
-    const raw = sent.find((s) => s.to === adminA.email).token
-    assert(adminA.emailVerificationTokenHash !== raw, 'raw token was stored')
-  })
-
-  await t('club admin can log in after verifying', async () => {
-    await verifyEmailOf(adminA)
+  await t('created club admin can log in right away', async () => {
     const { res, err } = await run(authController.login, {
       body: { email: adminA.email, password: STRONG_PW },
     })
-    assert(!err, 'unexpected error: ' + (err && err.message))
-    assert(res.statusCode === 200 && res.cookies.token)
+    assert(!err, 'login was blocked: ' + (err && err.message))
+    assert(res.statusCode === 200 && res.cookies.token, 'no session issued')
   })
 
-  console.log('\n== ELEVATION REQUIRES EMAIL CONFIRMATION ==')
+  console.log('\n== ELEVATION ACTIVATES IMMEDIATELY ==')
 
-  await t('granting sends an appointment email and leaves it PENDING', async () => {
-    const { res, err } = await run(adminUserController.elevateClubAdmin, {
-      user: superadmin,
-      params: { id: adminA._id },
-    })
+  await t('granting activates the privilege in the same request', async () => {
+    const { res, err } = await elevate(adminA._id)
     assert(!err, 'unexpected error: ' + (err && err.message))
     assert(res.statusCode === 200)
-    assert(adminA.elevatedAdminPending === true, 'not pending')
-    assert(adminA.elevatedAdmin !== true, 'privilege granted before confirmation')
-    assert(sent.some((s) => s.kind === 'elevation' && s.to === adminA.email), 'no elevation email')
-  })
-
-  await t('PENDING elevation grants NO superadmin powers yet', async () => {
-    const powers = await hasSuperadminPowers({ id: adminA._id, role: 'club_admin' })
-    assert(powers === false, 'pending appointment already had powers')
-  })
-
-  await t('pending elevated admin is still blocked from superadmin-only routes', async () => {
-    const { err } = await run(authorize('superadmin'), { user: { id: adminA._id, role: 'club_admin' } })
-    assert(err && err.statusCode === 403, 'status ' + (err && err.statusCode))
-  })
-
-  await t('confirming the appointment activates it', async () => {
-    const token = sent.filter((s) => s.kind === 'elevation' && s.to === adminA.email).pop().token
-    const { res, err } = await run(authController.verifyEmail, { body: { token } })
-    assert(!err, 'unexpected error: ' + (err && err.message))
-    assert(res.body.data.kind === 'elevation', 'wrong kind: ' + res.body.data.kind)
     assert(adminA.elevatedAdmin === true, 'not activated')
-    assert(adminA.elevatedAdminPending !== true, 'still pending')
+    assert(adminA.elevatedAdminGrantedAt instanceof Date, 'grant time not recorded')
+    assert(adminA.elevatedAdminPending !== true, 'left in a pending state')
   })
 
-  await t('appointment token is single-use', async () => {
-    assert(adminA.elevatedAdminTokenHash === null, 'token not cleared')
-    const token = sent.filter((s) => s.kind === 'elevation' && s.to === adminA.email).pop().token
-    const { err } = await run(authController.verifyEmail, { body: { token } })
-    assert(err && err.statusCode === 400, 'reuse was accepted')
+  await t('response reports it as active, not pending', async () => {
+    const { res } = await elevate(adminA._id).then(() => revoke(adminA._id)).then(() => elevate(adminA._id))
+    assert(res.body.data.elevationPending === undefined, 'elevationPending still returned')
+    assert(/active immediately/i.test(res.body.message), res.body.message)
+  })
+
+  await t('the elevated admin has superadmin powers at once', async () => {
+    const powers = await hasSuperadminPowers({ id: adminA._id, role: 'club_admin' })
+    assert(powers === true, 'powers not granted')
+  })
+
+  await t('re-elevating an already elevated admin is rejected with 409', async () => {
+    const { err } = await elevate(adminA._id)
+    assert(err && err.statusCode === 409, 'status ' + (err && err.statusCode))
   })
 
   console.log('\n== ELEVATED ADMIN HAS SUPERADMIN-LEVEL PERMISSIONS ==')
@@ -250,12 +208,14 @@ const main = async () => {
   })
 
   await t('elevated club_admin still CANNOT grant/revoke elevation', async () => {
-    const { err } = await run(adminUserController.elevateClubAdmin, {
-      user: { id: adminA._id, role: 'club_admin' },
-      params: { id: adminA._id },
-    })
+    const { err } = await elevate(adminA._id, { id: adminA._id, role: 'club_admin' })
     assert(err && err.statusCode === 403, 'status ' + (err && err.statusCode))
     assert(/Only a Super Admin/i.test(err.message), err.message)
+  })
+
+  await t('elevated club_admin cannot revoke either', async () => {
+    const { err } = await revoke(adminA._id, { id: adminA._id, role: 'club_admin' })
+    assert(err && err.statusCode === 403, 'status ' + (err && err.statusCode))
   })
 
   console.log('\n== MAXIMUM 2 ELEVATED ADMINISTRATORS ==')
@@ -265,90 +225,85 @@ const main = async () => {
   await t('a second club admin can be elevated (2 of 2)', async () => {
     const { created } = await makeClubAdmin(2)
     adminB = created
-    await verifyEmailOf(adminB)
-    const { err } = await run(adminUserController.elevateClubAdmin, {
-      user: superadmin,
-      params: { id: adminB._id },
-    })
+    const { err } = await elevate(adminB._id)
     assert(!err, 'unexpected error: ' + (err && err.message))
-    const token = sent.filter((s) => s.kind === 'elevation' && s.to === adminB.email).pop().token
-    await run(authController.verifyEmail, { body: { token } })
     assert(adminB.elevatedAdmin === true)
   })
 
   await t('a THIRD promotion is rejected with 409 and a clear message', async () => {
     const { created } = await makeClubAdmin(3)
     adminC = created
-    await verifyEmailOf(adminC)
-    const { err } = await run(adminUserController.elevateClubAdmin, {
-      user: superadmin,
-      params: { id: adminC._id },
-    })
+    const { err } = await elevate(adminC._id)
     assert(err, 'third promotion was allowed')
     assert(err.statusCode === 409, 'status ' + err.statusCode)
     assert(/maximum of 2/i.test(err.message), err.message)
-    assert(adminC.elevatedAdminPending !== true, 'appointment was still created')
+    assert(adminC.elevatedAdmin !== true, 'privilege was granted anyway')
   })
 
-  await t('the cap counts PENDING appointments too (no over-issue)', async () => {
-    // Free a slot, hand it to C as a pending appointment, then try a 4th admin.
-    await run(adminUserController.revokeClubAdminElevation, { user: superadmin, params: { id: adminB._id } })
-    await run(adminUserController.elevateClubAdmin, { user: superadmin, params: { id: adminC._id } })
-    assert(adminC.elevatedAdminPending === true, 'C not pending')
+  await t('the cap counts exactly the active holders', async () => {
+    const active = store.filter((u) => u.elevatedAdmin === true)
+    assert(active.length === 2, 'active holders: ' + active.length)
+  })
 
-    const { created: adminD } = await makeClubAdmin(4)
-    await verifyEmailOf(adminD)
-    const { err } = await run(adminUserController.elevateClubAdmin, {
-      user: superadmin,
-      params: { id: adminD._id },
+  console.log('\n== LEGACY PENDING RECORDS DO NOT HOLD A SLOT ==')
+
+  await t('a legacy elevatedAdminPending record grants no powers', async () => {
+    // A document left behind by the retired email-confirmation flow.
+    const legacy = new FakeUser({
+      role: 'club_admin',
+      email: 'legacy-pending@live.rmutl.ac.th',
+      managedClubs: [CLUB_A],
+      elevatedAdminPending: true,
     })
-    assert(err && err.statusCode === 409, 'pending slot was not counted')
+    store.push(legacy)
+    const powers = await hasSuperadminPowers({ id: legacy._id, role: 'club_admin' })
+    assert(powers === false, 'a pending record granted powers')
+    const { err } = await run(authorize('superadmin'), { user: { id: legacy._id, role: 'club_admin' } })
+    assert(err && err.statusCode === 403, 'pending record passed authorize')
   })
 
-  await t('cap is re-checked at activation time', async () => {
-    // Re-elevate B so 2 slots are active while C still holds a pending token.
-    await run(adminUserController.revokeClubAdminElevation, { user: superadmin, params: { id: adminC._id } })
-    const cToken = sent.filter((s) => s.kind === 'elevation' && s.to === adminC.email).pop().token
-    await run(adminUserController.elevateClubAdmin, { user: superadmin, params: { id: adminB._id } })
-    const bToken = sent.filter((s) => s.kind === 'elevation' && s.to === adminB.email).pop().token
-    await run(authController.verifyEmail, { body: { token: bToken } })
-    assert(adminB.elevatedAdmin === true, 'B not active')
+  await t('a legacy pending record does not consume one of the 2 slots', async () => {
+    // Free one active slot; the promotion must succeed even though a stale
+    // pending record still exists in the store.
+    await revoke(adminB._id)
+    const { err } = await elevate(adminC._id)
+    assert(!err, 'stale pending record blocked a free slot: ' + (err && err.message))
+    assert(adminC.elevatedAdmin === true, 'not activated')
+  })
 
-    // C's older token must not activate a third administrator.
-    adminC.elevatedAdminTokenHash = require('../src/utils/verificationToken').hashToken(cToken)
-    adminC.elevatedAdminExpires = new Date(Date.now() + 3600e3)
-    const { err } = await run(authController.verifyEmail, { body: { token: cToken } })
-    assert(err && err.statusCode === 409, 'activation bypassed the cap: ' + (err && err.statusCode))
-    assert(adminC.elevatedAdmin !== true, 'third admin became active')
+  await t('a legacy pending record can still be cleared through revoke', async () => {
+    const legacy = store.find((u) => u.email === 'legacy-pending@live.rmutl.ac.th')
+    const { err } = await revoke(legacy._id)
+    assert(!err, 'could not revoke a stale pending record: ' + (err && err.message))
+    assert(legacy.elevatedAdminPending !== true, 'still pending')
   })
 
   console.log('\n== REVOKE FREES A SLOT ==')
 
   await t('revoking removes the privilege but keeps the club_admin account', async () => {
-    const { err } = await run(adminUserController.revokeClubAdminElevation, {
-      user: superadmin,
-      params: { id: adminA._id },
-    })
+    const { err } = await revoke(adminA._id)
     assert(!err, 'unexpected error: ' + (err && err.message))
     assert(adminA.elevatedAdmin !== true, 'still elevated')
     assert(adminA.role === 'club_admin', 'role changed')
     assert(adminA.managedClubs.includes(CLUB_A), 'managed clubs lost')
-    assert(adminA.emailVerified === true, 'email verification lost')
+    assert(adminA.emailVerified === true, 'emailVerified flag lost')
   })
 
   await t('revoked admin loses superadmin powers immediately', async () => {
     assert((await hasSuperadminPowers({ id: adminA._id, role: 'club_admin' })) === false)
   })
 
-  await t('another club admin can now be promoted into the freed slot', async () => {
-    const { err } = await run(adminUserController.elevateClubAdmin, {
-      user: superadmin,
-      params: { id: adminC._id },
-    })
+  await t('revoking an admin that holds nothing is rejected', async () => {
+    const { err } = await revoke(adminA._id)
+    assert(err && err.statusCode === 400, 'status ' + (err && err.statusCode))
+  })
+
+  await t('another club admin can be promoted into the freed slot', async () => {
+    const { created } = await makeClubAdmin(4)
+    const { err } = await elevate(created._id)
     assert(!err, 'promotion after revoke failed: ' + (err && err.message))
-    const token = sent.filter((s) => s.kind === 'elevation' && s.to === adminC.email).pop().token
-    await run(authController.verifyEmail, { body: { token } })
-    assert(adminC.elevatedAdmin === true, 'not activated')
+    assert(created.elevatedAdmin === true, 'not activated')
+    await revoke(created._id) // leave a free slot for the tests below
   })
 
   console.log('\n== EXISTING BEHAVIOUR PRESERVED ==')
@@ -379,21 +334,29 @@ const main = async () => {
   })
 
   await t('elevating a non-club_admin id is rejected', async () => {
-    const { err } = await run(adminUserController.elevateClubAdmin, {
-      user: superadmin,
-      params: { id: '507f1f77bcf86cd799439077' },
-    })
+    const { err } = await elevate('507f1f77bcf86cd799439077')
     assert(err && err.statusCode === 404, 'status ' + (err && err.statusCode))
   })
 
-  await t('elevating an unverified club admin is rejected', async () => {
-    const { created } = await makeClubAdmin(6)
-    const { err } = await run(adminUserController.elevateClubAdmin, {
-      user: superadmin,
-      params: { id: created._id },
-    })
+  await t('elevating with an invalid id is rejected', async () => {
+    const { err } = await elevate('not-an-object-id')
     assert(err && err.statusCode === 400, 'status ' + (err && err.statusCode))
-    assert(/not verified their email/i.test(err.message), err.message)
+  })
+
+  await t('an account flagged emailVerified:false can now be elevated', async () => {
+    // The old flow refused these with a 400. Verification is gone, so the
+    // only gates left are the role check, the cap and root-superadmin.
+    const stuck = new FakeUser({
+      role: 'club_admin',
+      email: 'stuck-admin@live.rmutl.ac.th',
+      managedClubs: [CLUB_A],
+      emailVerified: false,
+    })
+    store.push(stuck)
+    const { err } = await elevate(stuck._id)
+    assert(!err, 'still blocked on email verification: ' + (err && err.message))
+    assert(stuck.elevatedAdmin === true, 'not activated')
+    await revoke(stuck._id)
   })
 
   console.log(`\nRESULT: ${pass} passed, ${fail} failed`)

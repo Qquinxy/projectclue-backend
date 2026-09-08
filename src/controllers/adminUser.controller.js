@@ -10,11 +10,6 @@ const {
   validateUpdateClubAdminInput,
   validateAssignClubsInput,
 } = require('../validators/adminUser.validator')
-const {
-  issueAndSendVerification,
-  issueAndSendElevation,
-  logMailFailure,
-} = require('../services/verification.service')
 const { MAX_ELEVATED_ADMINS, isRootSuperadmin } = require('../utils/adminAccess')
 
 const SALT_ROUNDS = 12
@@ -22,10 +17,6 @@ const SALT_ROUNDS = 12
 const sanitizeUser = (user) => {
   const obj = user.toObject ? user.toObject() : { ...user }
   delete obj.passwordHash
-  delete obj.emailVerificationTokenHash
-  delete obj.emailVerificationExpires
-  delete obj.elevatedAdminTokenHash
-  delete obj.elevatedAdminExpires
   return obj
 }
 
@@ -71,31 +62,13 @@ exports.createClubAdmin = catchAsync(async (req, res, next) => {
     faculty: '-',
     major: '-',
     year: 0,
-    // Club admins go through exactly the same email verification as student
-    // registration — this account cannot log in until the emailed link is
-    // opened. No bypass.
-    emailVerified: false,
+    // Created ready to use, exactly like student registration: there is no
+    // email verification step and no mail is sent.
+    emailVerified: true,
+    emailVerifiedAt: new Date(),
   })
 
-  // Same partial-success contract as registration: the account is committed,
-  // and a delivery failure is reported separately rather than being turned
-  // into an error that would suggest the account was not created.
-  let verificationEmailSent = true
-  try {
-    await issueAndSendVerification(user)
-  } catch (err) {
-    verificationEmailSent = false
-    logMailFailure('club admin verification send', err)
-  }
-
-  success(
-    res,
-    201,
-    { user: sanitizeUser(user), verificationEmailSent },
-    verificationEmailSent
-      ? 'Club admin created. A verification email has been sent — the account can log in once the link is opened.'
-      : 'Club admin created, but the verification email could not be sent right now. Use "resend verification email" with their address to try again.'
-  )
+  success(res, 201, { user: sanitizeUser(user) }, 'Club admin created. The account can log in immediately.')
 })
 
 exports.updateClubAdmin = catchAsync(async (req, res, next) => {
@@ -142,14 +115,11 @@ exports.removeClubAdmin = catchAsync(async (req, res, next) => {
 
   target.role = 'student'
   target.managedClubs = []
-  // Revoke an active elevation and invalidate any pending invitation:
-  // clearing the token hash is what makes an outstanding link unredeemable,
-  // exactly as revokeClubAdminElevation does.
+  // Revoke an active elevation, and clear any leftover pending flag from the
+  // retired email-confirmation flow, exactly as revokeClubAdminElevation does.
   target.elevatedAdmin = undefined
   target.elevatedAdminGrantedAt = null
   target.elevatedAdminPending = undefined
-  target.elevatedAdminTokenHash = null
-  target.elevatedAdminExpires = null
   await target.save()
 
   success(
@@ -162,8 +132,12 @@ exports.removeClubAdmin = catchAsync(async (req, res, next) => {
 
 // --- Super Admin-equivalent elevation ------------------------------------
 //
-// POST   /api/admin/users/:id/elevate  — grant (pending until email confirmed)
+// POST   /api/admin/users/:id/elevate  — grant, active immediately
 // DELETE /api/admin/users/:id/elevate  — revoke, freeing a slot
+//
+// Email confirmation was removed: a grant from a valid Super Admin activates
+// the privilege in the same request. The cap and the "root superadmin only"
+// restriction are unchanged.
 //
 // Only a real superadmin may grant or revoke: an elevated club_admin
 // deliberately cannot promote others or demote the account that appointed it,
@@ -174,12 +148,19 @@ const assertRootSuperadmin = (user) => {
   }
 }
 
-// Counts BOTH active holders and outstanding pending appointments, so two
-// grants issued back-to-back cannot both activate past the cap. The cap is
-// re-checked again at activation time in auth.controller.verifyEmail.
-const countElevatedOrPending = (excludeUserId) =>
+// Counts active holders only. There is no longer a pending state to reserve
+// a slot: a grant either activates immediately or fails the cap check, so the
+// two-step race the old count guarded against cannot occur.
+//
+// Legacy documents left over from the email-confirmation flow may still carry
+// `elevatedAdminPending: true`. Such a record grants no permissions
+// (adminAccess.hasSuperadminPowers only honours `elevatedAdmin === true`) and
+// deliberately does NOT consume a slot here — counting it would hold a slot
+// open forever, since there is no confirmation endpoint left to activate it.
+// A superadmin can still clear one through the revoke route.
+const countElevatedAdmins = (excludeUserId) =>
   User.countDocuments({
-    $or: [{ elevatedAdmin: true }, { elevatedAdminPending: true }],
+    elevatedAdmin: true,
     ...(excludeUserId ? { _id: { $ne: excludeUserId } } : {}),
   })
 
@@ -198,18 +179,9 @@ exports.elevateClubAdmin = catchAsync(async (req, res, next) => {
     return next(new AppError('This club admin already holds Super Admin-equivalent privileges', 409))
   }
 
-  // The appointee must own a confirmed address first — the appointment is
-  // itself confirmed by email, so an unverified address could never receive it.
-  if (target.emailVerified === false) {
-    return next(
-      new AppError(
-        'This club admin has not verified their email address yet. They must verify it before being appointed.',
-        400
-      )
-    )
-  }
-
-  const taken = await countElevatedOrPending(target._id)
+  // The cap is checked immediately before activation, in the same request
+  // that performs it — there is no window between granting and activating.
+  const taken = await countElevatedAdmins(target._id)
   if (taken >= MAX_ELEVATED_ADMINS) {
     return next(
       new AppError(
@@ -219,22 +191,17 @@ exports.elevateClubAdmin = catchAsync(async (req, res, next) => {
     )
   }
 
-  try {
-    await issueAndSendElevation(target)
-  } catch (err) {
-    logMailFailure('elevation send', err)
-    // The appointment is left pending and can simply be granted again once
-    // mail delivery recovers; no privilege was granted.
-    return next(
-      new AppError('Could not send the appointment confirmation email right now. Please try again later.', 503)
-    )
-  }
+  target.elevatedAdmin = true
+  target.elevatedAdminGrantedAt = new Date()
+  // Clear any leftover flag from the retired email-confirmation flow.
+  target.elevatedAdminPending = undefined
+  await target.save()
 
   success(
     res,
     200,
-    { user: sanitizeUser(target), elevationPending: true },
-    'Appointment email sent. The privilege becomes active only after the club admin confirms it by email.'
+    { user: sanitizeUser(target) },
+    'Super Admin-equivalent privileges granted. They are active immediately.'
   )
 })
 
@@ -253,14 +220,13 @@ exports.revokeClubAdminElevation = catchAsync(async (req, res, next) => {
     return next(new AppError('This club admin does not hold Super Admin-equivalent privileges', 400))
   }
 
-  // Revoking clears the active grant AND any outstanding invitation, so the
-  // slot is genuinely free for someone else. The club_admin role, managed
-  // clubs and login all continue to work untouched.
+  // Revoking clears the active grant, and also any leftover pending flag from
+  // the retired email-confirmation flow, so the slot is genuinely free and the
+  // stale record is tidied up. The club_admin role, managed clubs and login
+  // all continue to work untouched.
   target.elevatedAdmin = undefined
   target.elevatedAdminGrantedAt = null
   target.elevatedAdminPending = undefined
-  target.elevatedAdminTokenHash = null
-  target.elevatedAdminExpires = null
   await target.save()
 
   success(res, 200, { user: sanitizeUser(target) }, 'Super Admin-equivalent privileges revoked')
