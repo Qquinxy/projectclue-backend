@@ -7,7 +7,13 @@ const clubSchema = new mongoose.Schema(
     name: { type: String, required: true, trim: true },
     description: { type: String, required: true },
     category: { type: String, enum: CLUB_CATEGORIES, required: true },
+    // The single club cover/profile image. One image, unchanged.
     image: { type: String, default: '' },
+    // The club's own photo gallery — competition photos, atmosphere shots,
+    // past events. A SEPARATE concept from `image`: the cover is never
+    // copied in here, and these are never used as the cover. Files live in
+    // uploads/clubs-gallery/, managed only by the gallery endpoints.
+    galleryImages: { type: [String], default: [] },
     memberCount: { type: Number, default: 0 },
     maxMembers: { type: Number, required: true },
     advisorName: { type: String, default: '' },

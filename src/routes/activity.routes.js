@@ -4,6 +4,7 @@ const participationController = require('../controllers/participation.controller
 const exportController = require('../controllers/export.controller')
 const authenticate = require('../middleware/authenticate')
 const authorize = require('../middleware/authorize')
+const { uploadActivityImages } = require('../middleware/upload')
 
 const router = express.Router()
 
@@ -17,6 +18,28 @@ router.get('/:id', activityController.getActivity)
 router.post('/', authenticate, authorize('superadmin', 'club_admin'), activityController.createActivity)
 router.patch('/:id', authenticate, authorize('superadmin', 'club_admin'), activityController.updateActivity)
 router.delete('/:id', authenticate, authorize('superadmin', 'club_admin'), activityController.deleteActivity)
+
+// Activity gallery. Same ownership rule as updateActivity — superadmin any
+// activity, club_admin only activities under a club they manage — re-checked
+// inside the controller via assertManagesClub, since the club has to be read
+// off the activity. Students are already blocked by authorize() here, so
+// viewing images (a public GET) is all they can do.
+//
+// Upload accepts multiple files in one multipart request under the "images"
+// field; call it again to add more images later.
+router.post(
+  '/:id/images',
+  authenticate,
+  authorize('superadmin', 'club_admin'),
+  uploadActivityImages,
+  activityController.uploadActivityImages
+)
+router.delete(
+  '/:id/images',
+  authenticate,
+  authorize('superadmin', 'club_admin'),
+  activityController.deleteActivityImage
+)
 
 router.post('/:id/register', authenticate, authorize('student'), participationController.registerForActivity)
 router.delete('/:id/register', authenticate, authorize('student'), participationController.cancelRegistration)

@@ -22,8 +22,11 @@ app.use(cors({ origin: FRONTEND_URL, credentials: true }))
 app.use(express.json())
 app.use(cookieParser())
 
-// Publicly served uploaded club images — same trust level as any other
-// public club data, no auth needed to view them.
+// Publicly served uploaded images (clubs/ = club cover images,
+// clubs-gallery/ = club photo galleries, activities/ = activity images) —
+// same trust level as any other public club or activity data, no auth needed
+// to view them.
+// Uploading and deleting them is authenticated + role-gated on the API routes.
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')))
 
 app.get('/api/health', (req, res) => res.json({ success: true, message: 'OK' }))

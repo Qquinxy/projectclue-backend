@@ -38,5 +38,17 @@ exports.validateActivityInput = (body, { partial = false } = {}) => {
     errors.push(`status must be one of: ${Activity.STATUSES.join(', ')}`)
   }
 
+  // Gallery paths only ever arrive as strings. Actual image FILES go through
+  // POST /activities/:id/images, never through this JSON body.
+  if (body.images !== undefined) {
+    const list = Array.isArray(body.images) ? body.images : [body.images]
+    if (!list.every((value) => typeof value === 'string')) {
+      errors.push('images must be a string or an array of image paths')
+    }
+  }
+  if (body.image !== undefined && typeof body.image !== 'string') {
+    errors.push('image must be a string path')
+  }
+
   if (errors.length) throw new AppError(errors.join(', '), 400)
 }

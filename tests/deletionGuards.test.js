@@ -63,6 +63,8 @@ const ActivityStub = {
     return { deletedCount: 1 }
   },
   countDocuments: async (q) => Object.values(activities).filter((a) => String(a.club) === String(q.club)).length,
+  // Image helper the delete path uses to clean up gallery files.
+  resolveImages: (a) => (Array.isArray(a && a.images) ? a.images : a && a.image ? [a.image] : []),
   // Constants the activity validator reads off the model.
   TYPES: ['volunteer', 'workshop', 'meeting', 'event', 'training'],
   STATUSES: ['upcoming', 'ongoing', 'completed', 'cancelled'],

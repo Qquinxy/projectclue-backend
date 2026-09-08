@@ -9,8 +9,9 @@
     "dev": "nodemon server.js",
     "seed:admin": "node src/scripts/createAdmin.js",
     "seed:reference-data": "node src/scripts/seedReferenceData.js",
-    "test": "node tests/logic.test.js && node tests/authFlow.test.js && node tests/exportAuth.test.js && node tests/elevation.test.js && node tests/myActivities.test.js && node tests/removeClubAdmin.test.js && node tests/deletionGuards.test.js && node tests/referenceAndJoin.test.js",
-    "backfill:verified": "node src/scripts/backfillEmailVerified.js"
+    "test": "node tests/logic.test.js && node tests/authFlow.test.js && node tests/exportAuth.test.js && node tests/elevation.test.js && node tests/myActivities.test.js && node tests/removeClubAdmin.test.js && node tests/deletionGuards.test.js && node tests/referenceAndJoin.test.js && node tests/activityImages.test.js && node tests/clubGallery.test.js",
+    "backfill:verified": "node src/scripts/backfillEmailVerified.js",
+    "backfill:activity-images": "node src/scripts/backfillActivityImages.js"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
