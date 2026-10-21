@@ -13,9 +13,12 @@ const UPLOAD_ROOT = path.join(__dirname, '..', '..', 'uploads')
 const CLUB_IMAGE_DIR = path.join(UPLOAD_ROOT, 'clubs')
 const CLUB_GALLERY_DIR = path.join(UPLOAD_ROOT, 'clubs-gallery')
 const ACTIVITY_IMAGE_DIR = path.join(UPLOAD_ROOT, 'activities')
+const PRIVATE_UPLOAD_ROOT = path.join(__dirname, '..', '..', 'private-uploads')
+const ACTIVITY_EVIDENCE_DIR = path.join(PRIVATE_UPLOAD_ROOT, 'activity-evidence')
 fs.mkdirSync(CLUB_IMAGE_DIR, { recursive: true })
 fs.mkdirSync(CLUB_GALLERY_DIR, { recursive: true })
 fs.mkdirSync(ACTIVITY_IMAGE_DIR, { recursive: true })
+fs.mkdirSync(ACTIVITY_EVIDENCE_DIR, { recursive: true })
 
 // The single club COVER image. Unchanged from the original feature:
 // JPEG/PNG/WEBP/GIF at up to 5MB, one file per request.
@@ -113,6 +116,18 @@ const activityImagesUpload = multer({
   limits: { fileSize: ACTIVITY_IMAGE_BUSBOY_LIMIT, files: ACTIVITY_IMAGES_PER_REQUEST },
 })
 
+// Evidence is stored outside uploads/, which is exposed by express.static.
+// Its content type is verified from the decoded image after upload, not from
+// the client supplied MIME type or filename.
+const ACTIVITY_EVIDENCE_MAX_BYTES = 10 * 1024 * 1024
+const activityEvidenceUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, ACTIVITY_EVIDENCE_DIR),
+    filename: (req, file, cb) => cb(null, `${crypto.randomUUID()}.upload`),
+  }),
+  limits: { fileSize: ACTIVITY_EVIDENCE_MAX_BYTES + 1, files: 1 },
+})
+
 // Wraps multer's callback-style error (e.g. file too large, wrong field
 // name) into the app's AppError -> errorHandler flow instead of letting it
 // fall through as an unhandled 500.
@@ -160,6 +175,12 @@ exports.uploadActivityImages = wrapMulterErrors(
   }
 )
 
+exports.uploadActivityEvidence = wrapMulterErrors(activityEvidenceUpload.single('evidence'), {
+  tooLarge: 'Evidence image must be 10MB or smaller',
+  tooMany: 'Only one evidence image may be uploaded at a time',
+  wrongField: 'Unexpected file field — use "evidence"',
+})
+
 exports.CLUB_IMAGE_DIR = CLUB_IMAGE_DIR
 exports.CLUB_GALLERY_DIR = CLUB_GALLERY_DIR
 exports.CLUB_GALLERY_MAX_BYTES = CLUB_GALLERY_MAX_BYTES
@@ -171,3 +192,5 @@ exports.ACTIVITY_IMAGE_MAX_BYTES = ACTIVITY_IMAGE_MAX_BYTES
 exports.ACTIVITY_IMAGE_BUSBOY_LIMIT = ACTIVITY_IMAGE_BUSBOY_LIMIT
 exports.ACTIVITY_IMAGES_PER_REQUEST = ACTIVITY_IMAGES_PER_REQUEST
 exports.ACTIVITY_IMAGE_MIME_TYPES = ACTIVITY_MIME_TYPES
+exports.ACTIVITY_EVIDENCE_DIR = ACTIVITY_EVIDENCE_DIR
+exports.ACTIVITY_EVIDENCE_MAX_BYTES = ACTIVITY_EVIDENCE_MAX_BYTES

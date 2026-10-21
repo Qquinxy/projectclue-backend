@@ -8,6 +8,11 @@ const { success } = require('../utils/apiResponse')
 const { isValidObjectId } = require('../validators/validate')
 const volunteerHoursService = require('../services/volunteerHours.service')
 const { assertManagesClub } = require('../utils/clubAccess')
+const {
+  processActivityEvidence,
+  readActivityEvidence,
+  removeActivityEvidence,
+} = require('../utils/activityEvidence')
 
 exports.registerForActivity = catchAsync(async (req, res, next) => {
   const activityId = req.params.id
@@ -101,6 +106,79 @@ exports.getMyActivities = catchAsync(async (req, res, next) => {
     .sort({ registeredAt: -1 })
 
   success(res, 200, { participations })
+})
+
+// Evidence routes resolve the participation from the authenticated actor;
+// no owner ID supplied by the client is used for authorization.
+exports.loadOwnEvidenceParticipation = catchAsync(async (req, res, next) => {
+  const { id } = req.params
+  if (!isValidObjectId(id)) return next(new AppError('Invalid participation id', 400))
+  const participation = await ActivityParticipation.findOne({ _id: id, student: req.user.id })
+  if (!participation) return next(new AppError('Participation not found', 404))
+  req.evidenceParticipation = participation
+  next()
+})
+
+exports.loadManagedEvidenceParticipation = catchAsync(async (req, res, next) => {
+  const { id } = req.params
+  if (!isValidObjectId(id)) return next(new AppError('Invalid participation id', 400))
+  const participation = await ActivityParticipation.findById(id).populate('activity', 'club')
+  if (!participation) return next(new AppError('Participation not found', 404))
+  if (!participation.activity) return next(new AppError('Activity not found', 404))
+  await assertManagesClub(req.user, participation.activity.club)
+  req.evidenceParticipation = participation
+  next()
+})
+
+exports.uploadActivityEvidence = catchAsync(async (req, res, next) => {
+  if (!req.file) return next(new AppError('Evidence image is required', 400))
+  const participation = req.evidenceParticipation
+  let evidence
+  try {
+    evidence = await processActivityEvidence(req.file)
+    const previousFilename = participation.evidence?.filename
+    participation.evidence = evidence
+    await participation.save()
+    if (previousFilename) {
+      await removeActivityEvidence(previousFilename).catch((error) => {
+        console.error('Failed to remove replaced activity evidence:', error.message)
+      })
+    }
+  } catch (error) {
+    if (evidence?.filename) await removeActivityEvidence(evidence.filename).catch(() => {})
+    throw error
+  }
+
+  success(res, 201, { participation }, 'Evidence uploaded')
+})
+
+exports.getActivityEvidence = catchAsync(async (req, res, next) => {
+  const evidence = req.evidenceParticipation?.evidence
+  if (!evidence?.filename) return next(new AppError('Evidence image not found', 404))
+  const filePath = await readActivityEvidence(evidence)
+  res.sendFile(filePath, {
+    headers: {
+      'Content-Type': evidence.contentType,
+      'Content-Disposition': 'inline',
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+    },
+  }, (error) => {
+    if (error && !res.headersSent) next(error)
+  })
+})
+
+exports.deleteActivityEvidence = catchAsync(async (req, res, next) => {
+  const participation = req.evidenceParticipation
+  const filename = participation.evidence?.filename
+  if (!filename) return next(new AppError('Evidence image not found', 404))
+  participation.evidence = undefined
+  await participation.save()
+  await removeActivityEvidence(filename).catch((error) => {
+    console.error('Failed to remove deleted activity evidence:', error.message)
+  })
+  success(res, 200, { participation }, 'Evidence deleted')
 })
 
 exports.getActivityParticipants = catchAsync(async (req, res, next) => {

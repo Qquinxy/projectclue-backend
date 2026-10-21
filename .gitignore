@@ -2,6 +2,7 @@ node_modules/
 .env
 *-cookies.txt
 uploads/
+private-uploads/
 backup-local-before-restore/
 backup-production/
 *.tar

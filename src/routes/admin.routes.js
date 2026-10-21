@@ -22,6 +22,14 @@ router.get(
   participationController.getStudentVolunteerHoursAdmin
 )
 
+// Viewing evidence is read-only and scoped to the activity's managed club.
+router.get(
+  '/participations/:id/evidence',
+  authorize('superadmin', 'club_admin'),
+  participationController.loadManagedEvidenceParticipation,
+  participationController.getActivityEvidence
+)
+
 // Attendance marking: superadmin for any activity, club_admin only for
 // activities under a club they manage — enforced in the controller by
 // resolving participation -> activity -> club.

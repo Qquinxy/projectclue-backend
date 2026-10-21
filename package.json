@@ -9,7 +9,7 @@
     "dev": "nodemon server.js",
     "seed:admin": "node src/scripts/createAdmin.js",
     "seed:reference-data": "node src/scripts/seedReferenceData.js",
-    "test": "node tests/logic.test.js && node tests/authFlow.test.js && node tests/exportAuth.test.js && node tests/elevation.test.js && node tests/myActivities.test.js && node tests/removeClubAdmin.test.js && node tests/deletionGuards.test.js && node tests/referenceAndJoin.test.js && node tests/activityImages.test.js && node tests/clubGallery.test.js",
+    "test": "node tests/logic.test.js && node tests/authFlow.test.js && node tests/exportAuth.test.js && node tests/elevation.test.js && node tests/myActivities.test.js && node tests/removeClubAdmin.test.js && node tests/deletionGuards.test.js && node tests/referenceAndJoin.test.js && node tests/activityImages.test.js && node tests/activityEvidence.test.js && node tests/clubGallery.test.js",
     "backfill:verified": "node src/scripts/backfillEmailVerified.js",
     "backfill:activity-images": "node src/scripts/backfillActivityImages.js"
   },
@@ -22,6 +22,7 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.5.0",
     "multer": "^2.2.0",
+    "sharp": "^0.35.5",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
   },
   "devDependencies": {

@@ -18,8 +18,10 @@ RUN addgroup -S nodejs && adduser -S nodeapp -G nodejs
 COPY --from=deps --chown=nodeapp:nodejs /app/node_modules ./node_modules
 COPY --chown=nodeapp:nodejs . .
 
-# Writable uploads dir for multer (club images). mount a volume here.
-RUN mkdir -p /app/uploads && chown nodeapp:nodejs /app/uploads
+# Writable image directories. Evidence is stored separately from the public
+# /uploads static tree and should be mounted separately when persistence is needed.
+RUN mkdir -p /app/uploads /app/private-uploads/activity-evidence \
+  && chown -R nodeapp:nodejs /app/uploads /app/private-uploads
 
 USER nodeapp
 
