@@ -108,6 +108,21 @@ exports.updateMe = catchAsync(async (req, res, next) => {
     if (req.body[field] !== undefined) updates[field] = req.body[field]
   })
 
+  const currentUser = await User.findById(req.user.id)
+  if (!currentUser) return next(new AppError('User not found', 404))
+
+  if (req.body.studentId !== undefined && req.body.studentId !== currentUser.studentId) {
+    const studentId = typeof req.body.studentId === 'string' ? req.body.studentId.trim() : ''
+    if (!/^\d{11}-\d$/.test(studentId)) {
+      return next(new AppError('studentId must match the format 67543206105-8', 400))
+    }
+    const duplicate = await User.findOne({ studentId })
+    if (duplicate && String(duplicate._id) !== String(currentUser._id)) {
+      return next(new AppError('studentId is already in use', 409))
+    }
+    updates.studentId = studentId
+  }
+
   const user = await User.findByIdAndUpdate(req.user.id, updates, { new: true, runValidators: true })
   if (!user) return next(new AppError('User not found', 404))
 
