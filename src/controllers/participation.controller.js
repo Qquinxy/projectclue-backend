@@ -155,8 +155,16 @@ exports.uploadActivityEvidence = catchAsync(async (req, res, next) => {
 exports.getActivityEvidence = catchAsync(async (req, res, next) => {
   const evidence = req.evidenceParticipation?.evidence
   if (!evidence?.filename) return next(new AppError('Evidence image not found', 404))
-  const filePath = await readActivityEvidence(evidence)
-  res.sendFile(filePath, {
+  const filePathOrUrl = await readActivityEvidence(evidence)
+  if (/^https:\/\//i.test(filePathOrUrl)) {
+    res.set({
+      'Cache-Control': 'private, no-store',
+      'X-Content-Type-Options': 'nosniff',
+      'Content-Security-Policy': "default-src 'none'; sandbox",
+    })
+    return res.redirect(302, filePathOrUrl)
+  }
+  res.sendFile(filePathOrUrl, {
     headers: {
       'Content-Type': evidence.contentType,
       'Content-Disposition': 'inline',

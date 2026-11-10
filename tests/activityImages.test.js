@@ -125,6 +125,13 @@ const {
   sanitizeImageList,
   ACTIVITY_IMAGE_PREFIX,
 } = require('../src/utils/activityImages')
+const storage = require('../src/services/storage.service')
+const storedObjects = new Map()
+storage.uploadPublicObject = async (key, buffer, contentType) => {
+  storedObjects.set(key, { buffer: Buffer.from(buffer), contentType })
+  return key
+}
+storage.removePublicObject = async (key) => storedObjects.delete(key)
 
 const run = (h, o) =>
   new Promise((resolve, reject) => {
@@ -154,16 +161,19 @@ const superadmin = { id: 'root', role: 'superadmin' }
 const adminA = { id: 'adminA', role: 'club_admin' }
 const student = { id: 'stu1', role: 'student' }
 
-// Writes a real file into uploads/activities so the orphan-cleanup assertions
-// operate on the actual filesystem the controller uses.
-const uploadPath = (filename) => path.join(uploadModule.ACTIVITY_IMAGE_DIR, filename)
+// Upload fixtures live in the temporary staging directory used by Multer.
+const uploadPath = (filename) => path.join(uploadModule.TEMP_UPLOAD_DIR, filename)
 const makeUploadedFile = (name) => {
-  fs.mkdirSync(uploadModule.ACTIVITY_IMAGE_DIR, { recursive: true })
+  fs.mkdirSync(uploadModule.TEMP_UPLOAD_DIR, { recursive: true })
   const filename = '__test__' + name
   fs.writeFileSync(uploadPath(filename), 'x')
-  return { filename }
+  return { filename, path: uploadPath(filename), mimetype: 'image/jpeg' }
 }
-const cleanupFiles = (files) => files.forEach((f) => fs.rmSync(uploadPath(f.filename), { force: true }))
+const cleanupFiles = (files) => files.forEach((f) => {
+  try { fs.rmSync(uploadPath(f.filename), { force: true }) } catch (error) {
+    if (error.code !== 'EPERM') throw error // controller already removed the staged file
+  }
+})
 const uploadedExists = (filename) => fs.existsSync(uploadPath(filename))
 
 const main = async () => {

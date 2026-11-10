@@ -7,6 +7,8 @@ const { success } = require('../utils/apiResponse')
 const { isValidObjectId } = require('../validators/validate')
 const { validateActivityInput } = require('../validators/activity.validator')
 const { assertManagesClub } = require('../utils/clubAccess')
+const storage = require('../services/storage.service')
+const { getUploadBuffer, cleanupTempFiles } = require('../middleware/upload')
 const {
   toPublicPath,
   removeActivityImageFile,
@@ -162,8 +164,7 @@ exports.uploadActivityImages = catchAsync(async (req, res, next) => {
   // Any file multer already wrote for a request that turns out to be invalid
   // or unauthorized is removed again, so a rejected upload leaves nothing
   // behind on disk.
-  const discardUploads = () =>
-    Promise.all(files.map((file) => removeActivityImageFile(toPublicPath(file.filename))))
+  const discardUploads = () => cleanupTempFiles(files)
 
   const reject = async (error) => {
     await discardUploads()
@@ -188,14 +189,28 @@ exports.uploadActivityImages = catchAsync(async (req, res, next) => {
 
   // Fold a legacy single `image` into `images` on first write, so the old
   // picture becomes the cover of the new gallery instead of being lost.
-  const images = Activity.resolveImages(activity)
-  images.push(...files.map((file) => toPublicPath(file.filename)))
+  const uploadedKeys = []
+  try {
+    for (const file of files) {
+      const key = `activities/${file.filename}`
+      await storage.uploadPublicObject(key, await getUploadBuffer(file), file.mimetype)
+      uploadedKeys.push(key)
+    }
 
-  activity.images = images
-  activity.image = images[0] || ''
-  await activity.save()
+    const images = Activity.resolveImages(activity)
+    images.push(...files.map((file) => toPublicPath(file.filename)))
 
-  success(res, 201, { activity }, 'Activity images uploaded')
+    activity.images = images
+    activity.image = images[0] || ''
+    await activity.save()
+
+    success(res, 201, { activity }, 'Activity images uploaded')
+  } catch (error) {
+    await Promise.all(uploadedKeys.map((key) => storage.removePublicObject(key).catch(() => {})))
+    throw error
+  } finally {
+    await cleanupTempFiles(files)
+  }
 })
 
 // DELETE /api/activities/:id/images   body (or query): { image: "<stored path>" }

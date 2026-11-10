@@ -12,6 +12,14 @@ const ActivityParticipation = require('../src/models/ActivityParticipation')
 const upload = require('../src/middleware/upload')
 const evidenceFiles = require('../src/utils/activityEvidence')
 const participationController = require('../src/controllers/participation.controller')
+const storage = require('../src/services/storage.service')
+const storedPrivateObjects = new Map()
+storage.uploadPrivateObject = async (key, buffer, contentType) => {
+  storedPrivateObjects.set(key, { buffer: Buffer.from(buffer), contentType })
+  return key
+}
+storage.createPrivateSignedUrl = async (key) => `https://storage.test/${key}?token=test`
+storage.removePrivateObject = async (key) => storedPrivateObjects.delete(key)
 
 const STUDENT_ID = '507f1f77bcf86cd799439011'
 const PARTICIPATION_ID = '607f1f77bcf86cd799439001'
@@ -33,6 +41,8 @@ const invoke = (handler, req) => new Promise((resolve, reject) => {
       callback?.()
       resolve({ res: this })
     },
+    set(headers) { this.headers = headers; return this },
+    redirect(status, url) { this.statusCode = status; this.redirectUrl = url; resolve({ res: this }); return this },
   }
   Promise.resolve(handler(req, res, (error) => error ? resolve({ error }) : resolve({ res }))).catch(reject)
 })
@@ -47,21 +57,22 @@ async function main() {
     assert(!path.resolve(upload.ACTIVITY_EVIDENCE_DIR).startsWith(path.resolve('uploads') + path.sep),
       'evidence directory must not be under public uploads')
 
-    const inputPath = path.join(upload.ACTIVITY_EVIDENCE_DIR, 'test-input.upload')
+    const inputPath = path.join(upload.TEMP_UPLOAD_DIR, 'test-input.upload')
     const jpeg = await sharp({ create: { width: 3, height: 2, channels: 3, background: '#c03030' } })
       .jpeg().toBuffer()
     fs.writeFileSync(inputPath, jpeg)
     const savedEvidence = await evidenceFiles.processActivityEvidence({ path: inputPath })
     assert.equal(savedEvidence.contentType, 'image/jpeg')
     assert(!fs.existsSync(inputPath), 'temporary upload must be removed')
-    const outputPath = await evidenceFiles.readActivityEvidence(savedEvidence)
-    const verified = await sharp(outputPath).metadata()
+    await evidenceFiles.readActivityEvidence(savedEvidence)
+    const stored = storedPrivateObjects.get(`activity-evidence/${savedEvidence.filename}`)
+    const verified = await sharp(stored.buffer).metadata()
     assert.equal(verified.format, 'jpeg')
     assert.equal(verified.width, 3)
     console.log('PASS valid image bytes are decoded, normalized, and stored outside public uploads')
     await evidenceFiles.removeActivityEvidence(savedEvidence.filename)
 
-    const invalidPath = path.join(upload.ACTIVITY_EVIDENCE_DIR, 'spoofed.png.upload')
+    const invalidPath = path.join(upload.TEMP_UPLOAD_DIR, 'spoofed.png.upload')
     fs.writeFileSync(invalidPath, Buffer.from('not an image'))
     await assert.rejects(evidenceFiles.processActivityEvidence({ path: invalidPath }), (error) => error.statusCode === 400)
     assert(!fs.existsSync(invalidPath), 'invalid temporary upload must be removed')
@@ -128,7 +139,7 @@ async function main() {
     assert(!result.error, result.error?.message)
     console.log('PASS club admins are scoped to managed clubs and superadmins retain access')
 
-    const uploadPath = path.join(upload.ACTIVITY_EVIDENCE_DIR, 'controller-input.upload')
+    const uploadPath = path.join(upload.TEMP_UPLOAD_DIR, 'controller-input.upload')
     fs.writeFileSync(uploadPath, jpeg)
     participation = {
       _id: PARTICIPATION_ID,
@@ -157,6 +168,8 @@ async function main() {
     assert(studentRoute('get')?.stack.length >= 3)
     assert(studentRoute('delete')?.stack.length >= 3)
     assert(adminRoute('get')?.stack.length >= 3)
+    assert(studentRoute('get').stack.indexOf(studentRoute('get').stack.find((layer) => layer.handle === participationController.loadOwnEvidenceParticipation)) < studentRoute('get').stack.indexOf(studentRoute('get').stack.find((layer) => layer.handle === participationController.getActivityEvidence)), 'ownership loader must run before signed URL handler')
+    assert(adminRoute('get').stack.indexOf(adminRoute('get').stack.find((layer) => layer.handle === participationController.loadManagedEvidenceParticipation)) < adminRoute('get').stack.indexOf(adminRoute('get').stack.find((layer) => layer.handle === participationController.getActivityEvidence)), 'authorization loader must run before signed URL handler')
     assert(!adminRoute('post') && !adminRoute('delete'))
     console.log('PASS evidence routes are private, student mutations are owner-scoped, admin access is read-only')
   } finally {

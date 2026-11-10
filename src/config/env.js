@@ -22,4 +22,8 @@ module.exports = {
   // Optional; defaults to <backend>/api/auth/google/callback derived from the
   // request, so the same callback works locally and behind a proxy.
   GOOGLE_REDIRECT_URI: process.env.GOOGLE_REDIRECT_URI,
+  SUPABASE_URL: process.env.SUPABASE_URL,
+  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
+  SUPABASE_PUBLIC_BUCKET: process.env.SUPABASE_PUBLIC_BUCKET || 'projectclue-public',
+  SUPABASE_PRIVATE_BUCKET: process.env.SUPABASE_PRIVATE_BUCKET || 'projectclue-private',
 }

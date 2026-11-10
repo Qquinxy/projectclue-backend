@@ -2,7 +2,8 @@ const fs = require('fs/promises')
 const path = require('path')
 const crypto = require('crypto')
 const sharp = require('sharp')
-const { ACTIVITY_EVIDENCE_DIR } = require('../middleware/upload')
+const { ACTIVITY_EVIDENCE_DIR, getUploadBuffer, cleanupTempFile } = require('../middleware/upload')
+const storage = require('../services/storage.service')
 const AppError = require('./AppError')
 
 const FORMATS = {
@@ -19,58 +20,64 @@ const evidenceFilePath = (filename) => {
 }
 
 exports.processActivityEvidence = async (uploadedFile) => {
-  if (!uploadedFile?.path) throw new AppError('Evidence image is required', 400)
+  if (!uploadedFile?.path && !Buffer.isBuffer(uploadedFile?.buffer)) {
+    throw new AppError('Evidence image is required', 400)
+  }
 
-  let outputPath
   try {
-    // Read once so the temporary disk file can be removed reliably on Windows
-    // after Sharp has finished processing the in-memory bytes.
-    const input = await fs.readFile(uploadedFile.path)
+    const input = await getUploadBuffer(uploadedFile)
     const metadata = await sharp(input, { failOn: 'warning' }).metadata()
     const format = FORMATS[metadata.format]
     if (!format) {
       throw new AppError('Evidence must be a valid JPEG, PNG, or WebP image', 400)
     }
 
-    const filename = `${crypto.randomUUID()}${format.extension}`
-    outputPath = evidenceFilePath(filename)
-    await sharp(input, { failOn: 'warning' })
+    const output = await sharp(input, { failOn: 'warning' })
       .rotate()
       .toFormat(metadata.format)
-      .toFile(outputPath)
+      .toBuffer()
+    const filename = `${crypto.randomUUID()}${format.extension}`
+    await storage.uploadPrivateObject(`activity-evidence/${filename}`, output, format.contentType)
 
     return { filename, contentType: format.contentType, uploadedAt: new Date() }
   } catch (error) {
-    if (outputPath) await fs.unlink(outputPath).catch(() => {})
     if (error instanceof AppError) throw error
+    if (error?.statusCode >= 500) throw error
     throw new AppError('Evidence must be a valid JPEG, PNG, or WebP image', 400)
   } finally {
-    await fs.unlink(uploadedFile.path).catch(() => {})
+    await cleanupTempFile(uploadedFile)
   }
 }
 
+// A filename in MongoDB remains unchanged. Both legacy local records and new
+// Supabase records map to `activity-evidence/<filename>` in the private bucket.
+// Only callers behind the existing ownership/club authorization routes should
+// invoke this function. Local fallback keeps old files readable during rollout.
 exports.readActivityEvidence = async (evidence) => {
-  const fullPath = evidenceFilePath(evidence?.filename)
-  if (!fullPath || !FORMATS[Object.keys(FORMATS).find((format) => FORMATS[format].contentType === evidence.contentType)]) {
+  const filename = evidence?.filename
+  const localPath = evidenceFilePath(filename)
+  const format = Object.values(FORMATS).find((item) => item.contentType === evidence?.contentType)
+  if (!localPath || !format || path.extname(filename) !== format.extension) {
     throw new AppError('Evidence image not found', 404)
   }
 
   try {
-    await fs.access(fullPath)
+    return await storage.createPrivateSignedUrl(`activity-evidence/${filename}`, 120)
   } catch {
-    throw new AppError('Evidence image not found', 404)
+    try {
+      await fs.access(localPath)
+      return localPath
+    } catch {
+      throw new AppError('Evidence image not found', 404)
+    }
   }
-  return fullPath
 }
 
+// Delete only the private Supabase object. Legacy local files remain intact as
+// migration sources and are never removed by this helper.
 exports.removeActivityEvidence = async (filename) => {
-  const fullPath = evidenceFilePath(filename)
-  if (!fullPath) return
-  try {
-    await fs.unlink(fullPath)
-  } catch (error) {
-    if (error.code !== 'ENOENT') throw error
-  }
+  if (!evidenceFilePath(filename)) return
+  await storage.removePrivateObject(`activity-evidence/${filename}`)
 }
 
 exports.ACTIVITY_EVIDENCE_FORMATS = FORMATS

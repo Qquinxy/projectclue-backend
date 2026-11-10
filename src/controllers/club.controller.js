@@ -7,6 +7,8 @@ const { success } = require('../utils/apiResponse')
 const { isValidObjectId } = require('../validators/validate')
 const { validateClubInput } = require('../validators/club.validator')
 const { assertManagesClub } = require('../utils/clubAccess')
+const storage = require('../services/storage.service')
+const { getUploadBuffer, cleanupTempFile, cleanupTempFiles } = require('../middleware/upload')
 const {
   toPublicPath,
   removeClubGalleryFile,
@@ -89,16 +91,26 @@ exports.uploadClubImage = catchAsync(async (req, res, next) => {
   if (!isValidObjectId(id)) return next(new AppError('Invalid club id', 400))
   if (!req.file) return next(new AppError('An image file is required', 400))
 
-  const club = await Club.findById(id)
-  if (!club) return next(new AppError('Club not found', 404))
+  let objectKey
+  try {
+    const club = await Club.findById(id)
+    if (!club) return next(new AppError('Club not found', 404))
 
-  // A club_admin may only upload for a club they manage; superadmin may for any.
-  await assertManagesClub(req.user, club._id)
+    // A club_admin may only upload for a club they manage; superadmin may for any.
+    await assertManagesClub(req.user, club._id)
 
-  club.image = `/uploads/clubs/${req.file.filename}`
-  await club.save()
+    objectKey = `clubs/${req.file.filename}`
+    await storage.uploadPublicObject(objectKey, await getUploadBuffer(req.file), req.file.mimetype)
+    club.image = `/uploads/${objectKey}`
+    await club.save()
 
-  success(res, 200, { club }, 'Club image uploaded')
+    success(res, 200, { club }, 'Club image uploaded')
+  } catch (error) {
+    if (objectKey) await storage.removePublicObject(objectKey).catch(() => {})
+    throw error
+  } finally {
+    await cleanupTempFile(req.file)
+  }
 })
 
 // POST /api/clubs/:id/gallery-images  (multipart/form-data, field: "images")

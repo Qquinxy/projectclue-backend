@@ -1,5 +1,6 @@
 const fs = require('fs')
 const path = require('path')
+const os = require('os')
 const crypto = require('crypto')
 const multer = require('multer')
 const AppError = require('../utils/AppError')
@@ -15,10 +16,8 @@ const CLUB_GALLERY_DIR = path.join(UPLOAD_ROOT, 'clubs-gallery')
 const ACTIVITY_IMAGE_DIR = path.join(UPLOAD_ROOT, 'activities')
 const PRIVATE_UPLOAD_ROOT = path.join(__dirname, '..', '..', 'private-uploads')
 const ACTIVITY_EVIDENCE_DIR = path.join(PRIVATE_UPLOAD_ROOT, 'activity-evidence')
-fs.mkdirSync(CLUB_IMAGE_DIR, { recursive: true })
-fs.mkdirSync(CLUB_GALLERY_DIR, { recursive: true })
-fs.mkdirSync(ACTIVITY_IMAGE_DIR, { recursive: true })
-fs.mkdirSync(ACTIVITY_EVIDENCE_DIR, { recursive: true })
+const TEMP_UPLOAD_DIR = path.join(os.tmpdir(), 'projectclue-upload-tmp')
+fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true })
 
 // The single club COVER image. Unchanged from the original feature:
 // JPEG/PNG/WEBP/GIF at up to 5MB, one file per request.
@@ -71,9 +70,9 @@ const ACTIVITY_IMAGES_PER_REQUEST = 20
 // What is actually handed to busboy — see the comment on `limits` below.
 const ACTIVITY_IMAGE_BUSBOY_LIMIT = ACTIVITY_IMAGE_MAX_BYTES + 1
 
-const makeStorage = (dir, mimeTypes) =>
+const makeStorage = (mimeTypes) =>
   multer.diskStorage({
-    destination: (req, file, cb) => cb(null, dir),
+    destination: (req, file, cb) => cb(null, TEMP_UPLOAD_DIR),
     filename: (req, file, cb) => {
       const ext = mimeTypes[file.mimetype] || path.extname(file.originalname)
       cb(null, `${crypto.randomUUID()}${ext}`)
@@ -88,13 +87,13 @@ const makeFileFilter = (mimeTypes, message) => (req, file, cb) => {
 }
 
 const clubImageUpload = multer({
-  storage: makeStorage(CLUB_IMAGE_DIR, CLUB_MIME_TYPES),
+  storage: makeStorage(CLUB_MIME_TYPES),
   fileFilter: makeFileFilter(CLUB_MIME_TYPES, 'Image must be JPEG, PNG, WEBP, or GIF'),
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
 })
 
 const clubGalleryUpload = multer({
-  storage: makeStorage(CLUB_GALLERY_DIR, CLUB_GALLERY_MIME_TYPES),
+  storage: makeStorage(CLUB_GALLERY_MIME_TYPES),
   fileFilter: makeFileFilter(CLUB_GALLERY_MIME_TYPES, 'Images must be JPEG, PNG, or WEBP'),
   // `fileSize` is applied by multer to EACH file individually, so three 8MB
   // photos pass while one 10.1MB photo is rejected. It is never a budget for
@@ -103,7 +102,7 @@ const clubGalleryUpload = multer({
 })
 
 const activityImagesUpload = multer({
-  storage: makeStorage(ACTIVITY_IMAGE_DIR, ACTIVITY_MIME_TYPES),
+  storage: makeStorage(ACTIVITY_MIME_TYPES),
   fileFilter: makeFileFilter(ACTIVITY_MIME_TYPES, 'Images must be JPEG, PNG, or WEBP'),
   // `fileSize` is applied by multer to EACH file individually, so five 8MB
   // images pass while one 10.1MB image is rejected. It is never a budget for
@@ -122,7 +121,7 @@ const activityImagesUpload = multer({
 const ACTIVITY_EVIDENCE_MAX_BYTES = 10 * 1024 * 1024
 const activityEvidenceUpload = multer({
   storage: multer.diskStorage({
-    destination: (req, file, cb) => cb(null, ACTIVITY_EVIDENCE_DIR),
+    destination: (req, file, cb) => cb(null, TEMP_UPLOAD_DIR),
     filename: (req, file, cb) => cb(null, `${crypto.randomUUID()}.upload`),
   }),
   limits: { fileSize: ACTIVITY_EVIDENCE_MAX_BYTES + 1, files: 1 },
@@ -194,3 +193,23 @@ exports.ACTIVITY_IMAGES_PER_REQUEST = ACTIVITY_IMAGES_PER_REQUEST
 exports.ACTIVITY_IMAGE_MIME_TYPES = ACTIVITY_MIME_TYPES
 exports.ACTIVITY_EVIDENCE_DIR = ACTIVITY_EVIDENCE_DIR
 exports.ACTIVITY_EVIDENCE_MAX_BYTES = ACTIVITY_EVIDENCE_MAX_BYTES
+exports.TEMP_UPLOAD_DIR = TEMP_UPLOAD_DIR
+exports.cleanupTempFile = async (file) => {
+  if (!file?.path) return
+  const resolved = path.resolve(file.path)
+  const root = path.resolve(TEMP_UPLOAD_DIR) + path.sep
+  if (!resolved.startsWith(root)) return
+  try {
+    await fs.promises.unlink(resolved)
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error
+  }
+}
+exports.cleanupTempFiles = async (files = []) => {
+  await Promise.all(files.map((file) => exports.cleanupTempFile(file)))
+}
+exports.getUploadBuffer = async (file) => {
+  if (Buffer.isBuffer(file?.buffer)) return file.buffer
+  if (file?.path) return fs.promises.readFile(file.path)
+  throw new AppError('Uploaded file is unavailable', 400)
+}
